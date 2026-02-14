@@ -1,0 +1,27 @@
+[project]
+name = "gemini-quota"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.3.1",
+    "google-auth>=2.48.0",
+    "google-auth-oauthlib>=1.2.4",
+    "google-cloud-quotas>=0.5.0",
+    "requests>=2.32.5",
+    "rich>=14.3.2",
+]
+
+[project.scripts]
+gemini-quota = "src.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.3.1",
+    "pytest-sugar>=1.0.0",
+]
+
+[tool.uv]
+package = true
