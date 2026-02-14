@@ -126,12 +126,26 @@ class DisplayManager:
             else:
                 bar_color = "green"
 
-            # Progress bar representation
+            # Progress bar representation (smooth blocks like pytest-sugar)
             bar_width = 40
-            filled = int(remaining_pct / 100 * bar_width)
-            empty = bar_width - filled
+            total_filled = (remaining_pct / 100) * bar_width
+            filled_whole = int(total_filled)
+            remainder = total_filled - filled_whole
 
-            bar = f"[{bar_color}]" + "█" * filled + "[/]" + "░" * empty
+            blocks = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉"]
+            fraction_block = blocks[int(remainder * 8)]
+
+            if filled_whole >= bar_width:
+                bar = f"[{bar_color}]" + "█" * bar_width + "[/]"
+            else:
+                bar = f"[{bar_color}]" + "█" * filled_whole
+                if fraction_block != " ":
+                    bar += fraction_block
+                bar += "[/]"
+
+                # Pad with spaces to maintain alignment
+                used_width = filled_whole + (1 if fraction_block != " " else 0)
+                bar += " " * (bar_width - used_width)
 
             reset_info = q.get("reset") or "Unknown"
 
