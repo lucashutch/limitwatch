@@ -107,6 +107,13 @@ class DisplayManager:
                 )
             return
 
+        # Determine bar width based on terminal width
+        # styled_name (22) + spaces (2) + percentage (6) + max reset_str (~15)
+        reserved_width = 45
+        terminal_width = self.console.width
+        # Cap the bar width to 60 for better readability on very wide terminals
+        bar_width = max(10, min(60, terminal_width - reserved_width))
+
         for q in filtered_quotas:
             name = q.get("display_name", q.get("name"))
             source = q.get("source_type", "")
@@ -127,7 +134,6 @@ class DisplayManager:
                 bar_color = "green"
 
             # Progress bar representation (smooth blocks like pytest-sugar)
-            bar_width = 40
             total_filled = (remaining_pct / 100) * bar_width
             filled_whole = int(total_filled)
             remainder = total_filled - filled_whole
