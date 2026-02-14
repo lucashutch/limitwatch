@@ -1,5 +1,5 @@
 from unittest.mock import MagicMock, patch
-from src.quota_client import QuotaClient
+from gemini_quota.quota_client import QuotaClient
 
 
 @patch("requests.post")

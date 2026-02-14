@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from src.config import Config
+from gemini_quota.config import Config
 
 
 def test_config_load_empty(tmp_path):

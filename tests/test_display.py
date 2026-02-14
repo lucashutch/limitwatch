@@ -1,4 +1,4 @@
-from src.display import DisplayManager
+from gemini_quota.display import DisplayManager
 
 
 def test_display_manager_filter_quotas():
