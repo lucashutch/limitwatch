@@ -115,7 +115,7 @@ class DisplayManager:
             # Determine name color based on source
             name_color = "cyan" if source == "Gemini CLI" else "magenta"
             # Pad the name first to ensure consistent alignment, then add color tags
-            padded_name = f"{name:25}"
+            padded_name = f"{name:22}"
             styled_name = f"[{name_color}]{padded_name}[/]"
 
             # Determine bar color based on REMAINING amount

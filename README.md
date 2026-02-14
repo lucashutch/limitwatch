@@ -21,6 +21,15 @@ A powerful Python CLI tool to monitor your **Gemini CLI** and **Antigravity** qu
 
 This project is managed with [uv](https://github.com/astral-sh/uv).
 
+### Global Installation (Recommended)
+Install the tool globally to run it from anywhere:
+```bash
+uv tool install .
+```
+
+After installation, you can use the `gemini-quota` command directly.
+
+### Local Development
 1. Clone the repository.
 2. Install dependencies:
    ```bash
@@ -29,44 +38,34 @@ This project is managed with [uv](https://github.com/astral-sh/uv).
 
 ## Usage
 
-Run the tool using `uv`:
-
 ```bash
-# Login to a new account (interactive OAuth flow)
-uv run gemini-quota -l
+# Initial setup: login to your Google account(s)
+gemini-quota --login
 
-# Show primary quotas for all logged-in accounts
-uv run gemini-quota
-
-# Show all models including Gemini 2.0/2.5
-uv run gemini-quota -s
-
-# Check a specific account only
-uv run gemini-quota -a user@example.com
-
-# Manually associate/update a Google Cloud Project ID
-uv run gemini-quota -a user@example.com -p YOUR_PROJECT_ID
-
-# Output results as JSON
-uv run gemini-quota -j
-
-# Logout an account
-uv run gemini-quota --logout user@example.com
+# View your quotas
+gemini-quota
 ```
 
-### Command Line Options
+### Example Output
 
-| Flag | Long Flag | Description |
-|------|-----------|-------------|
-| `-l` | `--login` | Start the interactive OAuth login flow |
-| `-a` | `--account` | Filter results to a specific email address |
-| `-s` | `--show-all` | Show all models (including Gemini 2.0/2.5) |
-| `-j` | `--json` | Output results in JSON format |
-| `-p` | `--project-id` | Manually specify a Google Cloud Project ID |
-| `-r` | `--refresh` | Force refresh of OAuth access tokens |
-| | `--logout` | Remove a specific account |
-| | `--logout-all`| Clear all authenticated accounts |
-| `-h` | `--help` | Show help message and exit |
+```text
+Gemini CLI Quota Status
+
+📧 Account: user@example.com
+Gemini 3 Flash (CLI)  ████████████████████████                60.0% (14h 22m)
+Gemini 3 Pro (CLI)    ████████████                            30.0% (4h 15m)
+Gemini 3 Flash (AG)   ████████████████████████████████        80.0% (5d 12h)
+Gemini 3 Pro (AG)     ████████████████████                    50.0% (2d 03h)
+Claude (AG)           ████████████████                        40.0% (2d 19h 57m)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Options
+
+For a full list of available flags and descriptions, run:
+```bash
+gemini-quota --help
+```
 
 ## Configuration
 
@@ -89,4 +88,4 @@ ruff format .
 
 ## License
 
-MIT
+[MIT](LICENSE)
