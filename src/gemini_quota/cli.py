@@ -1,5 +1,6 @@
 import json
 import click
+import logging
 import concurrent.futures
 from pathlib import Path
 from .config import Config
@@ -77,6 +78,7 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
 )
 @click.option("--logout", help="Logout from a specific account.")
 @click.option("--logout-all", is_flag=True, help="Logout from all accounts.")
+@click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging.")
 def main(
     account,
     refresh,
@@ -86,8 +88,17 @@ def main(
     project_id,
     logout,
     logout_all,
+    verbose,
 ):
     """Query Gemini CLI/Code Assist quota usage and reset times across all accounts."""
+    # Configure logging
+    log_level = logging.DEBUG if verbose else logging.WARNING
+    logging.basicConfig(
+        level=log_level,
+        format="%(message)s",
+        datefmt="[%X]",
+    )
+
     config = Config()
     display = DisplayManager()
 

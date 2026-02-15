@@ -61,10 +61,17 @@ class QuotaClient:
             "User-Agent": user_agent,
         }
 
-        body = {"project": project_id} if project_id else {}
+        def make_request(p_id):
+            body = {"project": p_id} if p_id else {}
+            return requests.post(url, headers=headers, json=body, timeout=10)
 
         try:
-            response = requests.post(url, headers=headers, json=body, timeout=10)
+            response = make_request(project_id)
+
+            # If failed with project_id, try without it
+            if response.status_code != 200 and project_id:
+                response = make_request(None)
+
             if response.status_code == 200:
                 data = response.json()
                 buckets = data.get("buckets", [])
@@ -137,10 +144,17 @@ class QuotaClient:
             "Client-Metadata": '{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}',
         }
 
-        body = {"project": project_id} if project_id else {}
+        def make_request(p_id):
+            body = {"project": p_id} if p_id else {}
+            return requests.post(url, headers=headers, json=body, timeout=10)
 
         try:
-            response = requests.post(url, headers=headers, json=body, timeout=10)
+            response = make_request(project_id)
+
+            # If failed with project_id, try without it
+            if response.status_code != 200 and project_id:
+                response = make_request(None)
+
             if response.status_code == 200:
                 data = response.json()
                 models = data.get("models", {})
