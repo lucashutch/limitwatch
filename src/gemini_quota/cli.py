@@ -62,7 +62,7 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
 
 
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
-@click.version_option("0.0.2", "--version", "-V", prog_name="gemini-quota")
+@click.version_option("0.0.2", "--version", "-v", prog_name="gemini-quota")
 @click.option("-a", "--account", help="Email of the account to check.")
 @click.option("-r", "--refresh", is_flag=True, help="Force refresh of OAuth tokens.")
 @click.option(
@@ -79,7 +79,7 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
 )
 @click.option("--logout", help="Logout from a specific account.")
 @click.option("--logout-all", is_flag=True, help="Logout from all accounts.")
-@click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging.")
+@click.option("--verbose", is_flag=True, help="Enable verbose logging.")
 def main(
     account,
     refresh,
