@@ -1,5 +1,4 @@
 import json
-import os
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -42,7 +41,7 @@ class AuthManager:
             self.accounts = data.get("accounts", [])
             self.active_index = data.get("activeIndex", 0)
             return self.accounts
-        except Exception as e:
+        except Exception:
             # If it's a legacy file or malformed, we might fail here.
             # For now, let's just return empty if it's not a list/dict we expect.
             self.accounts = []

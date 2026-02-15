@@ -2,7 +2,6 @@ import json
 import click
 import logging
 import concurrent.futures
-from pathlib import Path
 from .config import Config
 from .auth import AuthManager
 from .quota_client import QuotaClient
@@ -217,7 +216,7 @@ def main(
         if not json_output:
             with display.console.status(
                 "[bold blue]Fetching quotas for all accounts..."
-            ) as status:
+            ):
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=min(len(indices_to_check), 10)
                 ) as executor:

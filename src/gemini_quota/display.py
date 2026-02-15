@@ -1,8 +1,4 @@
 from rich.console import Console
-from rich.panel import Panel
-from rich.progress import Progress, BarColumn, TextColumn
-from rich.table import Table
-from rich import box
 
 
 class DisplayManager:
@@ -10,7 +6,7 @@ class DisplayManager:
         self.console = Console()
 
     def print_main_header(self):
-        self.console.print(f"\n[bold blue]Gemini CLI Quota Status[/bold blue]")
+        self.console.print("\n[bold blue]Gemini CLI Quota Status[/bold blue]")
 
     def print_account_header(self, email: str):
         self.console.print(f"[dim]📧 Account: {email}[/dim]")
