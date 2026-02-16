@@ -11,6 +11,10 @@ class ChutesProvider(BaseProvider):
         self.api_key = account_data.get("apiKey")
 
     @property
+    def provider_name(self) -> str:
+        return "Chutes.ai"
+
+    @property
     def source_priority(self) -> int:
         return 0
 
@@ -20,6 +24,13 @@ class ChutesProvider(BaseProvider):
 
     def get_color(self, quota: Dict[str, Any]) -> str:
         return "yellow"
+
+    def interactive_login(self, display_manager: Any) -> Dict[str, Any]:
+        """Perform an interactive login flow with the user."""
+        import click
+
+        api_key = click.prompt("Enter Chutes.ai API key", hide_input=True)
+        return self.login(api_key=api_key)
 
     def filter_quotas(
         self, quotas: List[Dict[str, Any]], show_all: bool

@@ -44,3 +44,14 @@ class BaseProvider(ABC):
     def login(self, **kwargs) -> Dict[str, Any]:
         """Perform login flow and return account data."""
         pass
+
+    @abstractmethod
+    def interactive_login(self, display_manager: Any) -> Dict[str, Any]:
+        """Perform an interactive login flow with the user."""
+        pass
+
+    @property
+    @abstractmethod
+    def provider_name(self) -> str:
+        """User-friendly name of the provider."""
+        pass

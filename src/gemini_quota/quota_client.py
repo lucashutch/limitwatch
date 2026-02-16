@@ -45,3 +45,11 @@ class QuotaClient:
     def get_color(self, quota: Dict[str, Any]) -> str:
         """Get color for a quota item using the provider's logic."""
         return self.provider.get_color(quota)
+
+    @staticmethod
+    def get_available_providers() -> Dict[str, str]:
+        """Return a mapping of provider type to user-friendly name."""
+        return {
+            "google": GoogleProvider({}, None).provider_name,
+            "chutes": ChutesProvider({}).provider_name,
+        }

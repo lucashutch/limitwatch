@@ -3,6 +3,8 @@
 This repository contains a CLI tool for monitoring quota usage across multiple providers (Gemini, Antigravity, Chutes.ai).
 
 ## 🛠 Build, Lint, and Test
+- ALWAYS format code and check linting before commiting
+- ALWAYS check tests pass before commiting
 
 The project uses [uv](https://github.com/astral-sh/uv) for dependency management and packaging.
 

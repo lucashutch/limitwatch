@@ -24,7 +24,15 @@ def test_auth_manager_login_google(mock_session_cls, mock_flow_cls, tmp_path):
         "cloudaicompanionProject": "test-project-123"
     }
 
-    email = auth_mgr.login("google", services=["AG", "CLI"])
+    # Simulate provider login result
+    account_data = {
+        "type": "google",
+        "email": "new@example.com",
+        "refreshToken": "new_refresh_token",
+        "projectId": "test-project-123",
+    }
+
+    email = auth_mgr.login(account_data)
 
     assert email == "new@example.com"
     assert len(auth_mgr.accounts) == 1
@@ -42,7 +50,14 @@ def test_auth_manager_login_chutes(mock_get, tmp_path):
     mock_get.return_value.status_code = 200
     mock_get.return_value.json.return_value = {"email": "chutes@example.com"}
 
-    email = auth_mgr.login("chutes", api_key="fake_api_key")
+    # Simulate provider login result
+    account_data = {
+        "type": "chutes",
+        "email": "chutes@example.com",
+        "apiKey": "fake_api_key",
+    }
+
+    email = auth_mgr.login(account_data)
 
     assert email == "chutes@example.com"
     assert len(auth_mgr.accounts) == 1
