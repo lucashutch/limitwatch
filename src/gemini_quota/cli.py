@@ -10,24 +10,23 @@ from .display import DisplayManager
 
 def fetch_account_data(idx, acc_data, auth_mgr, show_all):
     email = acc_data.get("email", f"Account {idx}")
-    creds = auth_mgr.get_credentials(idx)
-    if not creds:
-        return email, None, f"Could not load credentials for {email}"
+    account_type = acc_data.get("type", "google")
+
+    creds = None
+    if account_type == "google":
+        creds = auth_mgr.get_credentials(idx)
+        if not creds:
+            return email, None, f"Could not load credentials for {email}"
+        try:
+            # Refresh token
+            auth_mgr.refresh_credentials(creds)
+        except Exception as e:
+            return email, None, f"Token refresh failed: {e}"
 
     try:
-        # Refresh token
-        auth_mgr.refresh_credentials(creds)
-
-        # Initialize Client
-        client = QuotaClient(creds)
-
-        # Use projectId or managedProjectId
-        project_id = acc_data.get("projectId") or acc_data.get("managedProjectId")
-
-        # Get enabled services for this account (default to both if not specified)
-        services = acc_data.get("services", ["AG", "CLI"])
-
-        quotas = client.fetch_quotas(project_id=project_id, services=services)
+        # Initialize Client with account data and credentials
+        client = QuotaClient(acc_data, credentials=creds)
+        quotas = client.fetch_quotas()
 
         if not quotas:
             # Fallback to cachedQuota if API call failed or returned empty
@@ -112,23 +111,45 @@ def main(
     if login:
         try:
             if not json_output:
-                display.console.print(
-                    "[bold blue]Select services to enable:[/bold blue]"
-                )
-                display.console.print(
-                    "1) Both Antigravity and Gemini CLI (Recommended)"
-                )
-                display.console.print("2) Antigravity only")
-                display.console.print("3) Gemini CLI only")
+                display.console.print("[bold blue]Select Provider:[/bold blue]")
+                display.console.print("1) Google (Gemini CLI / Antigravity)")
+                display.console.print("2) Chutes.ai")
 
-            choice = click.prompt("Enter choice", type=int, default=1)
-            services = ["AG", "CLI"]
-            if choice == 2:
-                services = ["AG"]
-            elif choice == 3:
-                services = ["CLI"]
+                provider_choice = click.prompt("Enter choice", type=int, default=1)
 
-            email = auth_mgr.login(services=services, manual_project_id=project_id)
+                if provider_choice == 1:
+                    display.console.print(
+                        "\n[bold blue]Select Google services to enable:[/bold blue]"
+                    )
+                    display.console.print(
+                        "1) Both Antigravity and Gemini CLI (Recommended)"
+                    )
+                    display.console.print("2) Antigravity only")
+                    display.console.print("3) Gemini CLI only")
+
+                    choice = click.prompt("Enter choice", type=int, default=1)
+                    services = ["AG", "CLI"]
+                    if choice == 2:
+                        services = ["AG"]
+                    elif choice == 3:
+                        services = ["CLI"]
+
+                    email = auth_mgr.login(
+                        services=services, manual_project_id=project_id
+                    )
+                elif provider_choice == 2:
+                    api_key = click.prompt("Enter Chutes.ai API key", hide_input=True)
+                    email = auth_mgr.login_chutes(api_key)
+                else:
+                    display.console.print("[red]Invalid choice.[/red]")
+                    return
+            else:
+                # For non-interactive JSON output, we default to Google login
+                # or expect the user to use provider-specific flags
+                email = auth_mgr.login(
+                    services=["AG", "CLI"], manual_project_id=project_id
+                )
+
             if not json_output:
                 display.console.print(
                     f"[green]Successfully logged in as [bold]{email}[/bold][/green]"

@@ -42,6 +42,11 @@ class DisplayManager:
                 name = q.get("display_name", "")
                 source = q.get("source_type", "")
 
+                # Chutes quotas are always shown if present
+                if source == "Chutes":
+                    filtered.append(q)
+                    continue
+
                 # Always hide 2.0 Flash in the verbose list (only show if show_all is True)
                 if "2.0" in name:
                     continue
@@ -62,8 +67,13 @@ class DisplayManager:
             source = q.get("source_type", "")
             name = q.get("display_name", "")
 
-            # Source priority: CLI first, then AG
-            source_prio = 0 if source == "Gemini CLI" else 1
+            # Source priority: Chutes first, then CLI, then AG
+            if source == "Chutes":
+                source_prio = 0
+            elif source == "Gemini CLI":
+                source_prio = 1
+            else:
+                source_prio = 2
 
             # Family priority
             family_prio = 99
@@ -116,7 +126,13 @@ class DisplayManager:
             remaining_pct = q.get("remaining_pct", 100)
 
             # Determine name color based on source
-            name_color = "cyan" if source == "Gemini CLI" else "magenta"
+            if source == "Gemini CLI":
+                name_color = "cyan"
+            elif source == "Antigravity":
+                name_color = "magenta"
+            else:
+                name_color = "yellow"
+
             # Pad the name first to ensure consistent alignment, then add color tags
             padded_name = f"{name:22}"
             styled_name = f"[{name_color}]{padded_name}[/]"
