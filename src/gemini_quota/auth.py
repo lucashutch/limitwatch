@@ -110,7 +110,14 @@ class AuthManager:
             raise Exception("Failed to retrieve email from Google")
 
         # Update or add account
-        existing_acc = next((a for a in self.accounts if a.get("email") == email), None)
+        existing_acc = next(
+            (
+                a
+                for a in self.accounts
+                if a.get("email") == email and a.get("type", "google") == "google"
+            ),
+            None,
+        )
 
         # Try to fetch managed project ID and metadata
         project_ids = {}
@@ -282,6 +289,7 @@ class AuthManager:
                 project_ids["managedProjectId"] = default_id
 
         account_data = {
+            "type": "google",
             "email": email,
             "refreshToken": creds.refresh_token,
             "services": services,
@@ -307,6 +315,46 @@ class AuthManager:
             )
 
         return email
+
+    def login_chutes(self, api_key: str) -> str:
+        """Perform Chutes.ai login using an API key and return the email/username."""
+        import requests
+
+        url = "https://api.chutes.ai/users/me"
+        headers = {"Authorization": api_key}
+
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            raise Exception(f"Failed to authenticate with Chutes.ai: {resp.text}")
+
+        data = resp.json()
+        # Chutes might use 'username' or 'email'. We'll check both.
+        identifier = data.get("email") or data.get("username") or "Chutes User"
+
+        # Update or add account
+        existing_acc = next(
+            (
+                a
+                for a in self.accounts
+                if a.get("email") == identifier and a.get("type") == "chutes"
+            ),
+            None,
+        )
+
+        account_data = {
+            "type": "chutes",
+            "email": identifier,
+            "apiKey": api_key,
+            "services": ["CHUTES"],
+        }
+
+        if existing_acc:
+            existing_acc.update(account_data)
+        else:
+            self.accounts.append(account_data)
+
+        self.save_accounts()
+        return identifier
 
     def logout(self, email: str) -> bool:
         initial_len = len(self.accounts)

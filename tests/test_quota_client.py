@@ -1,12 +1,13 @@
 from unittest.mock import MagicMock, patch
-from gemini_quota.quota_client import QuotaClient
+from gemini_quota.providers.google import GoogleProvider
 
 
 @patch("requests.post")
 def test_quota_client_fetch_cli(mock_post):
     creds = MagicMock()
     creds.token = "fake_token"
-    client = QuotaClient(creds)
+    # Use GoogleProvider directly or via QuotaClient
+    provider = GoogleProvider({"services": ["CLI"]}, creds)
 
     # Mock CLI response
     mock_post.return_value.status_code = 200
@@ -20,7 +21,7 @@ def test_quota_client_fetch_cli(mock_post):
         ]
     }
 
-    results = client._fetch_gemini_cli_quotas(project_id="test-project")
+    results = provider._fetch_gemini_cli_quotas(project_id="test-project")
 
     assert len(results) == 1
     assert results[0]["display_name"] == "Gemini 3 Pro (CLI)"
@@ -31,7 +32,7 @@ def test_quota_client_fetch_cli(mock_post):
 def test_quota_client_fetch_ag(mock_post):
     creds = MagicMock()
     creds.token = "fake_token"
-    client = QuotaClient(creds)
+    provider = GoogleProvider({"services": ["AG"]}, creds)
 
     # Mock AG response
     mock_post.return_value.status_code = 200
@@ -47,7 +48,7 @@ def test_quota_client_fetch_ag(mock_post):
         }
     }
 
-    results = client._fetch_antigravity_quotas(project_id="test-project")
+    results = provider._fetch_antigravity_quotas(project_id="test-project")
 
     assert len(results) == 1
     assert results[0]["display_name"] == "Claude (AG)"
