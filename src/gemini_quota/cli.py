@@ -111,23 +111,45 @@ def main(
     if login:
         try:
             if not json_output:
-                display.console.print(
-                    "[bold blue]Select services to enable:[/bold blue]"
-                )
-                display.console.print(
-                    "1) Both Antigravity and Gemini CLI (Recommended)"
-                )
-                display.console.print("2) Antigravity only")
-                display.console.print("3) Gemini CLI only")
+                display.console.print("[bold blue]Select Provider:[/bold blue]")
+                display.console.print("1) Google (Gemini CLI / Antigravity)")
+                display.console.print("2) Chutes.ai")
 
-            choice = click.prompt("Enter choice", type=int, default=1)
-            services = ["AG", "CLI"]
-            if choice == 2:
-                services = ["AG"]
-            elif choice == 3:
-                services = ["CLI"]
+                provider_choice = click.prompt("Enter choice", type=int, default=1)
 
-            email = auth_mgr.login(services=services, manual_project_id=project_id)
+                if provider_choice == 1:
+                    display.console.print(
+                        "\n[bold blue]Select Google services to enable:[/bold blue]"
+                    )
+                    display.console.print(
+                        "1) Both Antigravity and Gemini CLI (Recommended)"
+                    )
+                    display.console.print("2) Antigravity only")
+                    display.console.print("3) Gemini CLI only")
+
+                    choice = click.prompt("Enter choice", type=int, default=1)
+                    services = ["AG", "CLI"]
+                    if choice == 2:
+                        services = ["AG"]
+                    elif choice == 3:
+                        services = ["CLI"]
+
+                    email = auth_mgr.login(
+                        services=services, manual_project_id=project_id
+                    )
+                elif provider_choice == 2:
+                    api_key = click.prompt("Enter Chutes.ai API key", hide_input=True)
+                    email = auth_mgr.login_chutes(api_key)
+                else:
+                    display.console.print("[red]Invalid choice.[/red]")
+                    return
+            else:
+                # For non-interactive JSON output, we default to Google login
+                # or expect the user to use provider-specific flags
+                email = auth_mgr.login(
+                    services=["AG", "CLI"], manual_project_id=project_id
+                )
+
             if not json_output:
                 display.console.print(
                     f"[green]Successfully logged in as [bold]{email}[/bold][/green]"
