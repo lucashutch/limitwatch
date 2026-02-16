@@ -28,35 +28,9 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
         client = QuotaClient(acc_data, credentials=creds)
         quotas = client.fetch_quotas()
 
-        if not quotas:
-            # Fallback to cachedQuota if API call failed or returned empty
-            cached = acc_data.get("cachedQuota", {})
-            if cached:
-                # Mapping from cached keys to display names
-                family_map = {
-                    "gemini-pro": "Gemini 3 Pro (AG)",
-                    "gemini-flash": "Gemini 3 Flash (AG)",
-                    "claude": "Claude (AG)",
-                    "gemini-2.5-flash": "Gemini 2.5 Flash (AG)",
-                    "gemini-2.5-pro": "Gemini 2.5 Pro (AG)",
-                }
-                for family, q_data in cached.items():
-                    display_name = family_map.get(
-                        family, f"{family.replace('-', ' ').title()} (AG)"
-                    )
-                    quotas.append(
-                        {
-                            "name": family,
-                            "display_name": display_name,
-                            "remaining_pct": q_data.get("remainingFraction", 1.0) * 100,
-                            "reset": q_data.get("resetTime", "Unknown"),
-                            "source_type": "Antigravity",
-                        }
-                    )
-
-        return email, quotas, None
+        return email, quotas, client, None
     except Exception as e:
-        return email, None, str(e)
+        return email, None, None, str(e)
 
 
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
@@ -135,11 +109,11 @@ def main(
                         services = ["CLI"]
 
                     email = auth_mgr.login(
-                        services=services, manual_project_id=project_id
+                        "google", services=services, manual_project_id=project_id
                     )
                 elif provider_choice == 2:
                     api_key = click.prompt("Enter Chutes.ai API key", hide_input=True)
-                    email = auth_mgr.login_chutes(api_key)
+                    email = auth_mgr.login("chutes", api_key=api_key)
                 else:
                     display.console.print("[red]Invalid choice.[/red]")
                     return
@@ -147,7 +121,7 @@ def main(
                 # For non-interactive JSON output, we default to Google login
                 # or expect the user to use provider-specific flags
                 email = auth_mgr.login(
-                    services=["AG", "CLI"], manual_project_id=project_id
+                    "google", services=["AG", "CLI"], manual_project_id=project_id
                 )
 
             if not json_output:
@@ -266,7 +240,7 @@ def main(
 
         results = []
         for idx, _ in indices_to_check:
-            email, quotas, error = idx_to_result[idx]
+            email, quotas, client, error = idx_to_result[idx]
 
             if not json_output:
                 display.print_account_header(email)
@@ -274,10 +248,12 @@ def main(
                     display.console.print(f"[yellow]Warning:[/yellow] {error}")
                     display.console.print("━" * 50)
                     continue
-                display.draw_quota_bars(quotas, show_all=show_all)
+                display.draw_quota_bars(quotas, client=client, show_all=show_all)
                 display.console.print("━" * 50)
             else:
-                filtered_quotas = display.filter_quotas(quotas, show_all=show_all)
+                filtered_quotas = display.filter_quotas(
+                    quotas, client=client, show_all=show_all
+                )
                 results.append(
                     {
                         "email": email,
