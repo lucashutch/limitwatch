@@ -1,21 +1,23 @@
-# Gemini Quota Checker
+# Gemini & Chutes.ai Quota Checker
 
-A powerful Python CLI tool to monitor your **Gemini CLI** and **Antigravity** quota usage and reset times across multiple Google accounts.
+A powerful Python CLI tool to monitor your **Gemini CLI**, **Antigravity**, and **Chutes.ai** quota usage and reset times across multiple accounts.
 
 ## Features
 
-- **🚀 Integrated Login**: Authenticate directly within the tool using `gemini-quota --login`. No more manual config file hacking.
-- **👥 Multi-Account Support**: Manage and monitor multiple accounts simultaneously.
-- **🔍 Source Separation**: Clearly distinguishes between Gemini CLI (Cyan) and Antigravity (Magenta) quotas.
-- **📦 Quota Grouping**: Consolidates related models into families (Gemini 3 Pro, Claude, etc.) for a cleaner view.
-- **🕒 Human-Readable Reset Times**: Automatically calculates and shows time remaining until your quota resets (e.g., `3d 12h`).
-- **📊 Visual Progress Bars**: Dynamic horizontal bars colored by availability (Green > 50%, Yellow 20-50%, Red < 20%).
+- **🚀 Modular Provider Architecture**: Easily extensible system supporting Google (Gemini/Antigravity) and Chutes.ai.
+- **🔐 Unified Login**: Interactive login flow (`gemini-quota --login`) that lets you select your provider and handles authentication (OAuth for Google, API keys for Chutes).
+- **👥 Multi-Account Support**: Manage and monitor multiple accounts from different providers simultaneously.
+- **🔍 Source Separation**: Distinct color coding for each source:
+  - **Gemini CLI**: Cyan
+  - **Antigravity**: Magenta
+  - **Chutes.ai**: Yellow
+- **🕒 Real-time Reset Countdown**: Automatically calculates and shows time remaining until your quota resets (e.g., `2h 15m`).
+- **📊 Detailed Usage Stats**: Shows used/total units (e.g., `285/300`) and visual progress bars colored by availability.
 - **🧠 Smart Filtering**: 
-  - Shows primary premium models (Gemini 3, Claude) by default.
-  - Automatically shows legacy models (2.5, 1.5) if they are the only ones available for a source.
-  - Always hides verbose/experimental models (like Gemini 2.0 Flash) behind the `--show-all` flag.
+  - Shows primary premium models by default.
+  - Automatically shows legacy models if they are the only ones available.
+  - Hides verbose/experimental models behind the `--show-all` flag.
 - **📄 JSON Output**: Integration-ready JSON output for use in scripts or dashboards.
-- **⚡ Parallel Fetching**: Fast, concurrent API requests across all accounts.
 
 ## Installation
 
@@ -27,8 +29,6 @@ Install the tool globally to run it from anywhere:
 uv tool install .
 ```
 
-After installation, you can use the `gemini-quota` command directly.
-
 ### Local Development
 1. Clone the repository.
 2. Install dependencies:
@@ -39,7 +39,7 @@ After installation, you can use the `gemini-quota` command directly.
 ## Usage
 
 ```bash
-# Initial setup: login to your Google account(s)
+# Initial setup: login to your account(s)
 gemini-quota --login
 
 # View your quotas
@@ -49,27 +49,23 @@ gemini-quota
 ### Example Output
 
 ```text
-Gemini CLI Quota Status
+Quota Status
 
-📧 Account: user@example.com
+📧 Account: user@example.com (google)
 Gemini 3 Flash (CLI)  ████████████████████████                60.0% (14h 22m)
 Gemini 3 Pro (CLI)    ████████████                            30.0% (4h 15m)
 Gemini 3 Flash (AG)   ████████████████████████████████        80.0% (5d 12h)
-Gemini 3 Pro (AG)     ████████████████████                    50.0% (2d 03h)
-Claude (AG)           ████████████████                        40.0% (2d 19h 57m)
+Claude (AG)           ████████████████                        40.0% (2d 19m)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
-
-### Options
-
-For a full list of available flags and descriptions, run:
-```bash
-gemini-quota --help
+📧 Account: developer (chutes)
+Balance: $10.50       ██████████████████████████████████████  100.0%
+Quota (285/300)       ██████████████████████████████████      95.0% (2h 15m)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 ## Configuration
 
-The tool stores its configuration and encrypted refresh tokens in:
+The tool stores configuration and account data in:
 `~/.config/gemini-quota/accounts.json`
 
 ## Development
