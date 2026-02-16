@@ -1,13 +1,12 @@
 from unittest.mock import MagicMock, patch
-from gemini_quota.providers.google import GoogleProvider
+from gemini_quota.quota_client import QuotaClient
 
 
-@patch("requests.post")
-def test_quota_client_fetch_cli(mock_post):
+@patch("gemini_quota.providers.google.requests.post")
+def test_quota_client_google_fetch_cli(mock_post):
     creds = MagicMock()
     creds.token = "fake_token"
-    # Use GoogleProvider directly or via QuotaClient
-    provider = GoogleProvider({"services": ["CLI"]}, creds)
+    client = QuotaClient({"type": "google", "services": ["CLI"]}, credentials=creds)
 
     # Mock CLI response
     mock_post.return_value.status_code = 200
@@ -21,18 +20,18 @@ def test_quota_client_fetch_cli(mock_post):
         ]
     }
 
-    results = provider._fetch_gemini_cli_quotas(project_id="test-project")
+    results = client.fetch_quotas()
 
     assert len(results) == 1
     assert results[0]["display_name"] == "Gemini 3 Pro (CLI)"
     assert results[0]["remaining_pct"] == 80.0
 
 
-@patch("requests.post")
-def test_quota_client_fetch_ag(mock_post):
+@patch("gemini_quota.providers.google.requests.post")
+def test_quota_client_google_fetch_ag(mock_post):
     creds = MagicMock()
     creds.token = "fake_token"
-    provider = GoogleProvider({"services": ["AG"]}, creds)
+    client = QuotaClient({"type": "google", "services": ["AG"]}, credentials=creds)
 
     # Mock AG response
     mock_post.return_value.status_code = 200
@@ -48,8 +47,31 @@ def test_quota_client_fetch_ag(mock_post):
         }
     }
 
-    results = provider._fetch_antigravity_quotas(project_id="test-project")
+    results = client.fetch_quotas()
 
     assert len(results) == 1
     assert results[0]["display_name"] == "Claude (AG)"
     assert results[0]["remaining_pct"] == 50.0
+
+
+@patch("gemini_quota.providers.chutes.requests.get")
+def test_quota_client_chutes_fetch(mock_get):
+    client = QuotaClient({"type": "chutes", "apiKey": "fake_key"})
+
+    def mock_responses(url, **kwargs):
+        m = MagicMock()
+        m.status_code = 200
+        if "users/me/quota_usage/me" in url:
+            m.json.return_value = {"quota": 300, "used": 15, "chute_id": "*"}
+        elif "users/me" in url:
+            m.json.return_value = {"balance": 10.5, "email": "test@chutes.ai"}
+        return m
+
+    mock_get.side_effect = mock_responses
+
+    results = client.fetch_quotas()
+
+    # Balance + Quota
+    assert len(results) == 2
+    assert any("Balance: $10.50" in r["display_name"] for r in results)
+    assert any("Quota (285/300)" in r["display_name"] for r in results)

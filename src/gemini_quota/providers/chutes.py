@@ -1,7 +1,7 @@
 import requests
 import concurrent.futures
 from datetime import datetime, time, timedelta, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from .base import BaseProvider
 
 
@@ -9,6 +9,54 @@ class ChutesProvider(BaseProvider):
     def __init__(self, account_data: Dict[str, Any]):
         super().__init__(account_data)
         self.api_key = account_data.get("apiKey")
+
+    @property
+    def source_priority(self) -> int:
+        return 0
+
+    @property
+    def primary_color(self) -> str:
+        return "yellow"
+
+    def get_color(self, quota: Dict[str, Any]) -> str:
+        return "yellow"
+
+    def filter_quotas(
+        self, quotas: List[Dict[str, Any]], show_all: bool
+    ) -> List[Dict[str, Any]]:
+        # Chutes quotas are always shown if present
+        return quotas
+
+    def get_sort_key(self, quota: Dict[str, Any]) -> Tuple[int, int, str]:
+        # Balance first, then quotas
+        name = quota.get("name", "")
+        prio = 0 if "Balance" in name else 1
+        return 0, prio, name
+
+    def login(self, **kwargs) -> Dict[str, Any]:
+        """Perform Chutes.ai login using an API key and return account data."""
+        api_key = kwargs.get("api_key")
+        if not api_key:
+            raise Exception("API key is required for Chutes.ai login")
+
+        url = "https://api.chutes.ai/users/me"
+        headers = {"Authorization": api_key}
+
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            raise Exception(f"Failed to authenticate with Chutes.ai: {resp.text}")
+
+        data = resp.json()
+        # Chutes might use 'username' or 'email'. We'll check both.
+        identifier = data.get("email") or data.get("username") or "Chutes User"
+
+        account_data = {
+            "type": "chutes",
+            "email": identifier,
+            "apiKey": api_key,
+            "services": ["CHUTES"],
+        }
+        return account_data
 
     def _get_next_reset_iso(self) -> str:
         """Calculate the next 00:00 UTC reset time."""

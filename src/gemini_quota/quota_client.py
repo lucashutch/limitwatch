@@ -19,16 +19,29 @@ class QuotaClient:
             self.account_data["apiKey"] = api_key
             self.account_data["type"] = "chutes"
 
+        account_type = self.account_data.get("type", "google")
+        if account_type == "chutes":
+            self.provider = ChutesProvider(self.account_data)
+        else:
+            self.provider = GoogleProvider(self.account_data, self.credentials)
+
     def fetch_quotas(self, **kwargs) -> List[Dict[str, Any]]:
         """
         Fetch quotas using the appropriate provider.
         kwargs are ignored for backward compatibility in some calls but providers use account_data.
         """
-        account_type = self.account_data.get("type", "google")
+        return self.provider.fetch_quotas()
 
-        if account_type == "chutes":
-            provider = ChutesProvider(self.account_data)
-        else:
-            provider = GoogleProvider(self.account_data, self.credentials)
+    def filter_quotas(
+        self, quotas: List[Dict[str, Any]], show_all: bool
+    ) -> List[Dict[str, Any]]:
+        """Filter quotas using the provider's logic."""
+        return self.provider.filter_quotas(quotas, show_all)
 
-        return provider.fetch_quotas()
+    def get_sort_key(self, quota: Dict[str, Any]) -> Any:
+        """Get sort key for a quota item using the provider's logic."""
+        return self.provider.get_sort_key(quota)
+
+    def get_color(self, quota: Dict[str, Any]) -> str:
+        """Get color for a quota item using the provider's logic."""
+        return self.provider.get_color(quota)
