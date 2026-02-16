@@ -2,10 +2,16 @@ import json
 import click
 import logging
 import concurrent.futures
+from importlib.metadata import version, PackageNotFoundError
 from .config import Config
 from .auth import AuthManager
 from .quota_client import QuotaClient
 from .display import DisplayManager
+
+try:
+    __version__ = version("gemini-quota")
+except PackageNotFoundError:
+    __version__ = "unknown"
 
 
 def fetch_account_data(idx, acc_data, auth_mgr, show_all):
@@ -34,7 +40,7 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
 
 
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
-@click.version_option("0.0.2", "--version", "-v", prog_name="gemini-quota")
+@click.version_option(__version__, "--version", "-v", prog_name="gemini-quota")
 @click.option("-a", "--account", help="Email of the account to check.")
 @click.option("-r", "--refresh", is_flag=True, help="Force refresh of OAuth tokens.")
 @click.option(
