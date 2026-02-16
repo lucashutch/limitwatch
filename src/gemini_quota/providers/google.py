@@ -4,7 +4,6 @@ import logging
 import concurrent.futures
 from typing import List, Dict, Any, Optional, Tuple
 import google.auth.transport.requests
-from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from .base import BaseProvider
 
