@@ -29,6 +29,10 @@ class GoogleProvider(BaseProvider):
         self.credentials = credentials
 
     @property
+    def provider_name(self) -> str:
+        return "Google (Gemini CLI / Antigravity)"
+
+    @property
     def source_priority(self) -> int:
         return 1
 
@@ -95,6 +99,30 @@ class GoogleProvider(BaseProvider):
         elif "Claude" in name:
             family_prio = 5
         return source_prio, family_prio, name
+
+    def interactive_login(self, display_manager: Any) -> Dict[str, Any]:
+        """Perform an interactive login flow with the user."""
+        import click
+
+        display_manager.console.print(
+            "\n[bold blue]Select Google services to enable:[/bold blue]"
+        )
+        display_manager.console.print(
+            "1) Both Antigravity and Gemini CLI (Recommended)"
+        )
+        display_manager.console.print("2) Antigravity only")
+        display_manager.console.print("3) Gemini CLI only")
+
+        choice = click.prompt("Enter choice", type=int, default=1)
+        services = ["AG", "CLI"]
+        if choice == 2:
+            services = ["AG"]
+        elif choice == 3:
+            services = ["CLI"]
+
+        # manual_project_id could be passed from CLI flags if we want to support it
+        # but for simplicity in interactive mode we assume None unless we add a prompt
+        return self.login(services=services)
 
     def login(self, **kwargs) -> Dict[str, Any]:
         """Perform OAuth login flow and return account data."""

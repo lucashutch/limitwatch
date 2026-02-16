@@ -86,43 +86,22 @@ def main(
         try:
             if not json_output:
                 display.console.print("[bold blue]Select Provider:[/bold blue]")
-                display.console.print("1) Google (Gemini CLI / Antigravity)")
-                display.console.print("2) Chutes.ai")
+                providers = QuotaClient.get_available_providers()
+                for i, (p_type, p_name) in enumerate(providers.items(), 1):
+                    display.console.print(f"{i}) {p_name}")
 
-                provider_choice = click.prompt("Enter choice", type=int, default=1)
+                choice = click.prompt("Enter choice", type=int, default=1)
+                provider_type = list(providers.keys())[choice - 1]
 
-                if provider_choice == 1:
-                    display.console.print(
-                        "\n[bold blue]Select Google services to enable:[/bold blue]"
-                    )
-                    display.console.print(
-                        "1) Both Antigravity and Gemini CLI (Recommended)"
-                    )
-                    display.console.print("2) Antigravity only")
-                    display.console.print("3) Gemini CLI only")
-
-                    choice = click.prompt("Enter choice", type=int, default=1)
-                    services = ["AG", "CLI"]
-                    if choice == 2:
-                        services = ["AG"]
-                    elif choice == 3:
-                        services = ["CLI"]
-
-                    email = auth_mgr.login(
-                        "google", services=services, manual_project_id=project_id
-                    )
-                elif provider_choice == 2:
-                    api_key = click.prompt("Enter Chutes.ai API key", hide_input=True)
-                    email = auth_mgr.login("chutes", api_key=api_key)
-                else:
-                    display.console.print("[red]Invalid choice.[/red]")
-                    return
+                # Instantiate an empty client of that type to run its interactive login
+                client = QuotaClient(account_data={"type": provider_type})
+                account_data = client.provider.interactive_login(display)
+                email = auth_mgr.login(account_data)
             else:
                 # For non-interactive JSON output, we default to Google login
-                # or expect the user to use provider-specific flags
-                email = auth_mgr.login(
-                    "google", services=["AG", "CLI"], manual_project_id=project_id
-                )
+                client = QuotaClient(account_data={"type": "google"})
+                account_data = client.provider.login()
+                email = auth_mgr.login(account_data)
 
             if not json_output:
                 display.console.print(

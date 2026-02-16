@@ -71,17 +71,12 @@ class AuthManager:
         except Exception:
             return False
 
-    def login(self, provider_type: str, **kwargs) -> str:
-        """Delegate login to the appropriate provider and save account data."""
-        from .quota_client import QuotaClient
-
-        # Use an empty account_data of the right type to get the right provider
-        client = QuotaClient(account_data={"type": provider_type})
-        account_data = client.provider.login(**kwargs)
-
+    def login(self, account_data: Dict[str, Any]) -> str:
+        """Save or update account data from a provider."""
         email = account_data.get("email")
-        if not email:
-            raise Exception("Provider login failed to return an email identifier")
+        provider_type = account_data.get("type")
+        if not email or not provider_type:
+            raise Exception("Account data missing email or type")
 
         # Update or add account
         existing_acc = next(
