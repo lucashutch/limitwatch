@@ -1,5 +1,4 @@
 from unittest.mock import MagicMock, patch
-from gemini_quota.quota_client import QuotaClient
 from gemini_quota.providers.google import GoogleProvider
 
 
