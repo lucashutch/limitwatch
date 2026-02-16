@@ -10,24 +10,23 @@ from .display import DisplayManager
 
 def fetch_account_data(idx, acc_data, auth_mgr, show_all):
     email = acc_data.get("email", f"Account {idx}")
-    creds = auth_mgr.get_credentials(idx)
-    if not creds:
-        return email, None, f"Could not load credentials for {email}"
+    account_type = acc_data.get("type", "google")
+
+    creds = None
+    if account_type == "google":
+        creds = auth_mgr.get_credentials(idx)
+        if not creds:
+            return email, None, f"Could not load credentials for {email}"
+        try:
+            # Refresh token
+            auth_mgr.refresh_credentials(creds)
+        except Exception as e:
+            return email, None, f"Token refresh failed: {e}"
 
     try:
-        # Refresh token
-        auth_mgr.refresh_credentials(creds)
-
-        # Initialize Client
-        client = QuotaClient(creds)
-
-        # Use projectId or managedProjectId
-        project_id = acc_data.get("projectId") or acc_data.get("managedProjectId")
-
-        # Get enabled services for this account (default to both if not specified)
-        services = acc_data.get("services", ["AG", "CLI"])
-
-        quotas = client.fetch_quotas(project_id=project_id, services=services)
+        # Initialize Client with account data and credentials
+        client = QuotaClient(acc_data, credentials=creds)
+        quotas = client.fetch_quotas()
 
         if not quotas:
             # Fallback to cachedQuota if API call failed or returned empty
