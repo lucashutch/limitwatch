@@ -6,97 +6,18 @@ class DisplayManager:
         self.console = Console()
 
     def print_main_header(self):
-        self.console.print("\n[bold blue]Gemini CLI Quota Status[/bold blue]")
+        self.console.print("\n[bold blue]Quota Status[/bold blue]")
 
     def print_account_header(self, email: str):
         self.console.print(f"[dim]📧 Account: {email}[/dim]")
 
-    def filter_quotas(self, quotas, show_all=False):
-        if not quotas:
-            return []
+    def filter_quotas(self, quotas, client, show_all=False):
+        if not quotas or not client:
+            return quotas
+        return client.filter_quotas(quotas, show_all=show_all)
 
-        if show_all:
-            filtered = quotas
-        else:
-            # Smart filtering:
-            # Identify if "premium" (Gemini 3 or Claude) models exist for each source
-            has_premium_cli = any(
-                (
-                    "3" in q.get("display_name", "")
-                    or "Claude" in q.get("display_name", "")
-                )
-                and q.get("source_type") == "Gemini CLI"
-                for q in quotas
-            )
-            has_premium_ag = any(
-                (
-                    "3" in q.get("display_name", "")
-                    or "Claude" in q.get("display_name", "")
-                )
-                and q.get("source_type") == "Antigravity"
-                for q in quotas
-            )
-
-            filtered = []
-            for q in quotas:
-                name = q.get("display_name", "")
-                source = q.get("source_type", "")
-
-                # Chutes quotas are always shown if present
-                if source == "Chutes":
-                    filtered.append(q)
-                    continue
-
-                # Always hide 2.0 Flash in the verbose list (only show if show_all is True)
-                if "2.0" in name:
-                    continue
-
-                is_premium = "3" in name or "Claude" in name
-
-                if is_premium:
-                    filtered.append(q)
-                elif source == "Gemini CLI" and not has_premium_cli:
-                    # If no Gemini 3/Claude exists for CLI, show the 2.5/1.5 models
-                    filtered.append(q)
-                elif source == "Antigravity" and not has_premium_ag:
-                    # Same for Antigravity
-                    filtered.append(q)
-
-        # Custom sorting order
-        def sort_key(q):
-            source = q.get("source_type", "")
-            name = q.get("display_name", "")
-
-            # Source priority: Chutes first, then CLI, then AG
-            if source == "Chutes":
-                source_prio = 0
-            elif source == "Gemini CLI":
-                source_prio = 1
-            else:
-                source_prio = 2
-
-            # Family priority
-            family_prio = 99
-            if "Gemini 2.0 Flash" in name:
-                family_prio = 0
-            elif "Gemini 2.5 Flash" in name:
-                family_prio = 1
-            elif "Gemini 2.5 Pro" in name:
-                family_prio = 2
-            elif "Gemini 3 Flash" in name:
-                family_prio = 3
-            elif "Gemini 3 Pro" in name:
-                family_prio = 4
-            elif "Claude" in name:
-                family_prio = 5
-
-            return source_prio, family_prio, name
-
-        filtered.sort(key=sort_key)
-        return filtered
-
-    def draw_quota_bars(self, quotas, show_all=False):
-        filtered_quotas = self.filter_quotas(quotas, show_all=show_all)
+    def draw_quota_bars(self, quotas, client, show_all=False):
+        filtered_quotas = self.filter_quotas(quotas, client, show_all=show_all)
 
         if not filtered_quotas:
             if not quotas:
@@ -105,7 +26,7 @@ class DisplayManager:
                 )
             elif not show_all:
                 self.console.print(
-                    "[dim]No premium models found (use --show-all to see Gemini 2.0/2.5).[/dim]"
+                    "[dim]No premium models found (use --show-all to see all models).[/dim]"
                 )
             else:
                 self.console.print(
@@ -113,25 +34,21 @@ class DisplayManager:
                 )
             return
 
+        # Sort filtered quotas using provider logic via client
+        if client:
+            filtered_quotas.sort(key=lambda q: client.get_sort_key(q))
+
         # Determine bar width based on terminal width
-        # styled_name (22) + spaces (2) + percentage (6) + max reset_str (~15)
         reserved_width = 45
         terminal_width = self.console.width
-        # Cap the bar width to 60 for better readability on very wide terminals
         bar_width = max(10, min(60, terminal_width - reserved_width))
 
         for q in filtered_quotas:
             name = q.get("display_name", q.get("name"))
-            source = q.get("source_type", "")
             remaining_pct = q.get("remaining_pct", 100)
 
-            # Determine name color based on source
-            if source == "Gemini CLI":
-                name_color = "cyan"
-            elif source == "Antigravity":
-                name_color = "magenta"
-            else:
-                name_color = "yellow"
+            # Determine name color using provider logic via client
+            name_color = client.get_color(q) if client else "white"
 
             # Pad the name first to ensure consistent alignment, then add color tags
             padded_name = f"{name:22}"
@@ -145,7 +62,7 @@ class DisplayManager:
             else:
                 bar_color = "green"
 
-            # Progress bar representation (smooth blocks like pytest-sugar)
+            # Progress bar representation (smooth blocks)
             total_filled = (remaining_pct / 100) * bar_width
             filled_whole = int(total_filled)
             remainder = total_filled - filled_whole

@@ -28,35 +28,9 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
         client = QuotaClient(acc_data, credentials=creds)
         quotas = client.fetch_quotas()
 
-        if not quotas:
-            # Fallback to cachedQuota if API call failed or returned empty
-            cached = acc_data.get("cachedQuota", {})
-            if cached:
-                # Mapping from cached keys to display names
-                family_map = {
-                    "gemini-pro": "Gemini 3 Pro (AG)",
-                    "gemini-flash": "Gemini 3 Flash (AG)",
-                    "claude": "Claude (AG)",
-                    "gemini-2.5-flash": "Gemini 2.5 Flash (AG)",
-                    "gemini-2.5-pro": "Gemini 2.5 Pro (AG)",
-                }
-                for family, q_data in cached.items():
-                    display_name = family_map.get(
-                        family, f"{family.replace('-', ' ').title()} (AG)"
-                    )
-                    quotas.append(
-                        {
-                            "name": family,
-                            "display_name": display_name,
-                            "remaining_pct": q_data.get("remainingFraction", 1.0) * 100,
-                            "reset": q_data.get("resetTime", "Unknown"),
-                            "source_type": "Antigravity",
-                        }
-                    )
-
-        return email, quotas, None
+        return email, quotas, client, None
     except Exception as e:
-        return email, None, str(e)
+        return email, None, None, str(e)
 
 
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
@@ -112,43 +86,22 @@ def main(
         try:
             if not json_output:
                 display.console.print("[bold blue]Select Provider:[/bold blue]")
-                display.console.print("1) Google (Gemini CLI / Antigravity)")
-                display.console.print("2) Chutes.ai")
+                providers = QuotaClient.get_available_providers()
+                for i, (p_type, p_name) in enumerate(providers.items(), 1):
+                    display.console.print(f"{i}) {p_name}")
 
-                provider_choice = click.prompt("Enter choice", type=int, default=1)
+                choice = click.prompt("Enter choice", type=int, default=1)
+                provider_type = list(providers.keys())[choice - 1]
 
-                if provider_choice == 1:
-                    display.console.print(
-                        "\n[bold blue]Select Google services to enable:[/bold blue]"
-                    )
-                    display.console.print(
-                        "1) Both Antigravity and Gemini CLI (Recommended)"
-                    )
-                    display.console.print("2) Antigravity only")
-                    display.console.print("3) Gemini CLI only")
-
-                    choice = click.prompt("Enter choice", type=int, default=1)
-                    services = ["AG", "CLI"]
-                    if choice == 2:
-                        services = ["AG"]
-                    elif choice == 3:
-                        services = ["CLI"]
-
-                    email = auth_mgr.login(
-                        services=services, manual_project_id=project_id
-                    )
-                elif provider_choice == 2:
-                    api_key = click.prompt("Enter Chutes.ai API key", hide_input=True)
-                    email = auth_mgr.login_chutes(api_key)
-                else:
-                    display.console.print("[red]Invalid choice.[/red]")
-                    return
+                # Instantiate an empty client of that type to run its interactive login
+                client = QuotaClient(account_data={"type": provider_type})
+                account_data = client.provider.interactive_login(display)
+                email = auth_mgr.login(account_data)
             else:
                 # For non-interactive JSON output, we default to Google login
-                # or expect the user to use provider-specific flags
-                email = auth_mgr.login(
-                    services=["AG", "CLI"], manual_project_id=project_id
-                )
+                client = QuotaClient(account_data={"type": "google"})
+                account_data = client.provider.login()
+                email = auth_mgr.login(account_data)
 
             if not json_output:
                 display.console.print(
@@ -266,7 +219,7 @@ def main(
 
         results = []
         for idx, _ in indices_to_check:
-            email, quotas, error = idx_to_result[idx]
+            email, quotas, client, error = idx_to_result[idx]
 
             if not json_output:
                 display.print_account_header(email)
@@ -274,10 +227,12 @@ def main(
                     display.console.print(f"[yellow]Warning:[/yellow] {error}")
                     display.console.print("━" * 50)
                     continue
-                display.draw_quota_bars(quotas, show_all=show_all)
+                display.draw_quota_bars(quotas, client=client, show_all=show_all)
                 display.console.print("━" * 50)
             else:
-                filtered_quotas = display.filter_quotas(quotas, show_all=show_all)
+                filtered_quotas = display.filter_quotas(
+                    quotas, client=client, show_all=show_all
+                )
                 results.append(
                     {
                         "email": email,

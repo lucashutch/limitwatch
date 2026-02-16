@@ -1,58 +1,50 @@
 # Agent Instructions for Gemini Quota
 
-This repository contains a CLI tool for monitoring Gemini CLI and Antigravity quota usage.
+This repository contains a CLI tool for monitoring quota usage across multiple providers (Gemini, Antigravity, Chutes.ai).
 
 ## 🛠 Build, Lint, and Test
+- ALWAYS format code and check linting before commiting
+- ALWAYS check tests pass before commiting
 
 The project uses [uv](https://github.com/astral-sh/uv) for dependency management and packaging.
 
 ### Commands
 - **Install Dependencies:** `uv sync`
 - **Run CLI:** `uv run gemini-quota`
-- **Linting:** Use `ruff check .` (if installed) or adhere to the existing style.
-- **Formatting:** Use `ruff format .` or `black .`.
-- **Testing:** Unit tests are located in the `tests/` directory.
-    - Run all tests: `uv run pytest`
-    - Run a single test file: `uv run pytest tests/test_file.py`
-    - Run a specific test: `uv run pytest tests/test_file.py::test_function_name`
+- **Testing:** `uv run pytest`
 
 ### Project Structure
-- `src/`: Core source code.
-    - `cli.py`: Main entry point and CLI command definitions using `click`.
-    - `auth.py`: OAuth2 flow and account management logic.
-    - `config.py`: Configuration and file path management.
-    - `display.py`: Logic for rendering rich output and progress bars.
-    - `quota_client.py`: API clients for fetching quotas.
-
-## 📦 Dependencies and Environment
-
-The project relies on several key Google libraries and the `rich` library for CLI rendering.
-
-- **Click:** Used for defining CLI commands and options.
-- **Rich:** Used for console output, including colored text, progress bars, and status indicators.
-- **Google Auth & OAuthlib:** Handles the OAuth2 flow and credential management.
-- **Requests:** Used for direct API calls to Google's internal quota endpoints.
-
-### Environment Setup
-- Python 3.11 or higher is required.
-- The tool stores configuration and account data in `~/.config/gemini-quota/`.
-- `accounts.json` contains refresh tokens and project associations.
+- `src/gemini_quota/`:
+    - `cli.py`: CLI entry point using `click`. Handles the main loop and interactive login flow.
+    - `quota_client.py`: The **Orchestrator**. It instantiates the correct provider and delegates fetching/filtering/sorting.
+    - `auth.py`: Manages account storage and credential loading. Delegates login to providers.
+    - `providers/`:
+        - `base.py`: Abstract base class `BaseProvider` defining the interface for all providers.
+        - `google.py`: Handles Google OAuth, project discovery, and Gemini/Antigravity quotas.
+        - `chutes.py`: Handles Chutes.ai API key validation, balance, and daily usage quotas.
+    - `display.py`: Pure rendering logic. Agnostic of provider details; uses data provided by the `QuotaClient`.
 
 ## 🛠 Business Logic Details
 
+### Provider Pattern
+Each provider is responsible for its own:
+- **Auth:** Interactive login and token refresh.
+- **Data:** API calls to its specific endpoints.
+- **Display Metadata:** Defining its primary color, source priority, and sorting/filtering rules.
+
 ### Authentication Flow
-- The `AuthManager` handles loading, saving, and refreshing credentials.
-- `login()` uses `InstalledAppFlow` to perform a local server OAuth flow.
-- It attempts to automatically discover the Google Cloud Project ID (`projectId`) via internal endpoints or Cloud Resource Manager.
+- `AuthManager.login(provider_type, **kwargs)` is the entry point.
+- It uses `QuotaClient` to get the appropriate provider instance and calls its `login()` method.
+- **Google:** Uses `InstalledAppFlow` and performs complex project discovery via `loadCodeAssist`, `getManagedProject`, and Cloud Resource Manager.
+- **Chutes:** Validates the API key via `GET /users/me`.
 
 ### Quota Fetching
-- `QuotaClient` performs parallel requests to fetch both Gemini CLI and Antigravity quotas.
-- CLI quotas use `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota`.
-- Antigravity quotas use `cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels`.
-- Smart filtering in `DisplayManager` hides verbose models (like Gemini 2.0/2.5) by default unless primary models are missing or `--show-all` is used.
+- `QuotaClient.fetch_quotas()` triggers the provider's fetching logic.
+- **Google:** Fetches CLI and Antigravity quotas in parallel.
+- **Chutes:** Fetches balance and primary quota usage summaries.
 
 ## 🤖 Agent Rules
-- **No Proactive Docs:** Do not create `.md` files unless specifically requested.
+- **Modular Extensibility:** When adding a new provider, create a new class in `providers/` and register it in `quota_client.py`.
+- **Provider Isolation:** Do not add provider-specific strings or logic to `display.py` or `cli.py`. Use the `BaseProvider` interface.
 - **Path Construction:** Always use absolute paths for file operations.
-- **Verify Changes:** Run the CLI or scripts to verify your changes whenever possible.
-- **Security:** Never log or commit OAuth secrets or refresh tokens. The hardcoded Client IDs are public knowledge for these specific Google services.
+- **Security:** Never log or commit OAuth secrets or API keys.
