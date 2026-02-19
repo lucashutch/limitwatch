@@ -35,4 +35,10 @@ jobs:
         run: uv sync
 
       - name: Run tests
-        run: uv run pytest
+        run: |
+          uv run pytest | tee pytest_output.txt
+          echo "## Coverage Summary" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          # Extract only the coverage section from the output
+          sed -n '/coverage: platform/,/TOTAL/p' pytest_output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
