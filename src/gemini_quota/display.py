@@ -17,8 +17,19 @@ class DisplayManager:
             return quotas
         return client.filter_quotas(quotas, show_all=show_all)
 
-    def draw_quota_bars(self, quotas, client, show_all=False):
+    def draw_quota_bars(self, quotas, client, show_all=False, query=None):
         filtered_quotas = self.filter_quotas(quotas, client, show_all=show_all)
+
+        if query:
+            queries = [query] if isinstance(query, str) else query
+            for q_str in queries:
+                q_lower = q_str.lower()
+                filtered_quotas = [
+                    q
+                    for q in filtered_quotas
+                    if q_lower in q.get("name", "").lower()
+                    or q_lower in q.get("display_name", "").lower()
+                ]
 
         if not filtered_quotas:
             if not quotas:
