@@ -1,7 +1,5 @@
 import pytest
 from unittest.mock import MagicMock, patch
-import json
-from pathlib import Path
 from gemini_quota.auth import AuthManager
 
 

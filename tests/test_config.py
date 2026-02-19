@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from gemini_quota.config import Config
 
 
