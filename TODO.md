@@ -29,7 +29,7 @@
 - [ ] Z.AI
 - [ ] Together AI / Fireworks
 
-## 🛠 Maintenance & Improvements
-- [ ] Add more unit tests for provider-specific logic.
+### 1. Unit Testing & Quality
+- [x] Add more unit tests for provider-specific logic (Coverage increased to 85%).
 - [ ] Improve error handling for network timeouts.
 - [ ] Add documentation for manual project ID configuration.
