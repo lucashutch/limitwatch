@@ -12,7 +12,7 @@ class ChutesProvider(BaseProvider):
 
     @property
     def provider_name(self) -> str:
-        return "Chutes.ai"
+        return "Chutes"
 
     @property
     def source_priority(self) -> int:
@@ -30,6 +30,8 @@ class ChutesProvider(BaseProvider):
         import click
 
         api_key = click.prompt("Enter Chutes.ai API key", hide_input=True)
+        if api_key:
+            api_key = api_key.strip()
         return self.login(api_key=api_key)
 
     def filter_quotas(
@@ -51,19 +53,24 @@ class ChutesProvider(BaseProvider):
             raise Exception("API key is required for Chutes.ai login")
 
         url = "https://api.chutes.ai/users/me"
-        headers = {"Authorization": api_key}
+        headers = {
+            "Authorization": api_key,
+            "Content-Type": "application/json",
+        }
 
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code != 200:
             raise Exception(f"Failed to authenticate with Chutes.ai: {resp.text}")
 
         data = resp.json()
-        # Chutes might use 'username' or 'email'. We'll check both.
-        identifier = data.get("email") or data.get("username") or "Chutes User"
+        # Chutes might use 'username', 'email' or 'id'.
+        identifier = (
+            data.get("email") or data.get("username") or data.get("id") or "Chutes User"
+        )
 
         account_data = {
             "type": "chutes",
-            "email": identifier,
+            "email": str(identifier),
             "apiKey": api_key,
             "services": ["CHUTES"],
         }
@@ -82,7 +89,10 @@ class ChutesProvider(BaseProvider):
             return []
 
         results = []
-        headers = {"Authorization": self.api_key}
+        headers = {
+            "Authorization": self.api_key,
+            "Content-Type": "application/json",
+        }
         base_url = "https://api.chutes.ai"
         next_reset = self._get_next_reset_iso()
 
@@ -102,105 +112,103 @@ class ChutesProvider(BaseProvider):
                             "source_type": "Chutes",
                         }
                     )
+            elif me_resp.status_code in (401, 403):
+                raise Exception("Unauthorized: Invalid Chutes.ai API key")
 
-            # 2. Fetch Main Quota Usage (using the optimized 'me' endpoint)
-            # This endpoint returns the primary/default quota usage for the user
-            usage_resp = requests.get(
-                f"{base_url}/users/me/quota_usage/me", headers=headers, timeout=10
+            # 2. Fetch Quota List
+            # We fetch all quotas first to get the correct chute_ids
+            quota_resp = requests.get(
+                f"{base_url}/users/me/quotas", headers=headers, timeout=10
             )
-            if usage_resp.status_code == 200:
-                data = usage_resp.json()
-                # data is expected to be {"quota": 300, "used": 15, "chute_id": "*"}
-                limit = data.get("quota") or data.get("limit") or 0
-                used = data.get("used", 0)
-                chute_id = data.get("chute_id") or "*"
+            if quota_resp.status_code == 200:
+                quotas_list = quota_resp.json()
+                if not isinstance(quotas_list, list):
+                    quotas_list = []
 
-                if limit > 0:
-                    remaining_pct = max(0, (limit - used) / limit) * 100
+                def fetch_usage(q):
+                    # chute_id might be '*' or a specific UUID
+                    cid = q.get("chute_id") or q.get("id")
+                    if not cid:
+                        return None
+                    try:
+                        # Handle '*' encoding if necessary, though requests often handles it
+                        # The usage endpoint is /users/me/quota_usage/{chute_id}
+                        usage_url = f"{base_url}/users/me/quota_usage/{cid}"
+                        u_resp = requests.get(usage_url, headers=headers, timeout=10)
+                        if u_resp.status_code == 200:
+                            d = u_resp.json()
+                            if "chute_id" not in d:
+                                d["chute_id"] = cid
+                            return d
+                    except Exception:
+                        pass
+                    return None
 
-                    # Clean up display name: remove * and show remaining/total
-                    remaining = int(limit - used)
-                    if chute_id == "*":
-                        display_name = f"Quota ({remaining}/{int(limit)})"
-                    else:
-                        display_name = f"Quota: {chute_id} ({remaining}/{int(limit)})"
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(len(quotas_list) or 1, 5)
+                ) as executor:
+                    usages = list(executor.map(fetch_usage, quotas_list))
 
-                    results.append(
-                        {
-                            "name": f"Chutes Quota ({chute_id})",
-                            "display_name": display_name,
-                            "remaining_pct": remaining_pct,
-                            "reset": next_reset,
-                            "source_type": "Chutes",
-                        }
-                    )
+                for q_usage in usages:
+                    if not q_usage:
+                        continue
 
-            # 3. Fallback/Support for specific quotas if the main one is not enough
-            # We only do this if results is still only the balance or empty
-            if len(results) <= 1:
-                quota_resp = requests.get(
-                    f"{base_url}/users/me/quotas", headers=headers, timeout=10
+                    cid = q_usage.get("chute_id") or "Unknown"
+                    limit = q_usage.get("quota") or q_usage.get("limit") or 0
+                    used = q_usage.get("used", 0)
+
+                    if limit > 0:
+                        remaining_pct = max(0, (limit - used) / limit) * 100
+                        remaining = int(limit - used)
+
+                        if cid == "*":
+                            display_name = f"Quota ({remaining}/{int(limit)})"
+                        else:
+                            display_name = (
+                                f"Quota: {cid[:8]}... ({remaining}/{int(limit)})"
+                            )
+
+                        results.append(
+                            {
+                                "name": f"Chutes Quota ({cid})",
+                                "display_name": display_name,
+                                "remaining_pct": remaining_pct,
+                                "reset": next_reset,
+                                "source_type": "Chutes",
+                            }
+                        )
+
+            # 3. Fallback to 'me' shortcut if no quotas were found in the list
+            if len([r for r in results if "Quota" in r["name"]]) == 0:
+                usage_resp = requests.get(
+                    f"{base_url}/users/me/quota_usage/me", headers=headers, timeout=10
                 )
-                if quota_resp.status_code == 200:
-                    quotas_list = quota_resp.json()
-                    if isinstance(quotas_list, list) and len(quotas_list) > 0:
-                        # If we found multiple quotas, we fetch their usage
-                        # (Keeping the previous logic as fallback for non-standard setups)
-                        def fetch_usage(q):
-                            cid = q.get("chute_id") or q.get("id")
-                            if (
-                                not cid or cid == "*"
-                            ):  # Already handled by 'me' endpoint effectively
-                                return None
-                            try:
-                                usage_url = f"{base_url}/users/me/quota_usage/{cid}"
-                                u_resp = requests.get(
-                                    usage_url, headers=headers, timeout=10
-                                )
-                                if u_resp.status_code == 200:
-                                    d = u_resp.json()
-                                    if "chute_id" not in d:
-                                        d["chute_id"] = cid
-                                    return d
-                            except Exception:
-                                pass
-                            return None
+                if usage_resp.status_code == 200:
+                    data = usage_resp.json()
+                    limit = data.get("quota") or data.get("limit") or 0
+                    used = data.get("used", 0)
+                    chute_id = data.get("chute_id") or "*"
 
-                        with concurrent.futures.ThreadPoolExecutor(
-                            max_workers=5
-                        ) as executor:
-                            usages = list(executor.map(fetch_usage, quotas_list))
+                    if limit > 0:
+                        remaining_pct = max(0, (limit - used) / limit) * 100
+                        remaining = int(limit - used)
+                        display_name = f"Quota ({remaining}/{int(limit)})"
 
-                        for q_usage in usages:
-                            if not q_usage:
-                                continue
-                            cid = (
-                                q_usage.get("chute_id")
-                                or q_usage.get("id")
-                                or "Unknown"
-                            )
-                            lim = q_usage.get("quota") or q_usage.get("limit") or 0
-                            usd = q_usage.get("used", 0)
-                            rem_pct = (
-                                max(0, (lim - usd) / lim) * 100 if lim > 0 else 100.0
-                            )
-
-                            remaining = int(lim - usd)
-                            if cid == "*":
-                                display_name = f"Quota ({remaining}/{int(lim)})"
-                            else:
-                                display_name = f"Quota: {cid} ({remaining}/{int(lim)})"
-
-                            results.append(
-                                {
-                                    "name": f"Chutes Quota ({cid})",
-                                    "display_name": display_name,
-                                    "remaining_pct": rem_pct,
-                                    "reset": next_reset,
-                                    "source_type": "Chutes",
-                                }
-                            )
-        except Exception:
+                        results.append(
+                            {
+                                "name": f"Chutes Quota ({chute_id})",
+                                "display_name": display_name,
+                                "remaining_pct": remaining_pct,
+                                "reset": next_reset,
+                                "source_type": "Chutes",
+                            }
+                        )
+        except Exception as e:
+            # Re-raise authentication errors, otherwise return what we have
+            if "Unauthorized" in str(e):
+                raise e
             pass
+
+        return results
 
         return results
