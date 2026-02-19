@@ -8,8 +8,9 @@ class DisplayManager:
     def print_main_header(self):
         self.console.print("\n[bold blue]Quota Status[/bold blue]")
 
-    def print_account_header(self, email: str):
-        self.console.print(f"[dim]📧 Account: {email}[/dim]")
+    def print_account_header(self, email: str, provider: str = ""):
+        header = f"{provider}: {email}" if provider else email
+        self.console.print(f"[dim]📧 {header}[/dim]")
 
     def filter_quotas(self, quotas, client, show_all=False):
         if not quotas or not client:
