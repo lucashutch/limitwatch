@@ -8,8 +8,19 @@ class DisplayManager:
     def print_main_header(self):
         self.console.print("\n[bold blue]Quota Status[/bold blue]")
 
-    def print_account_header(self, email: str, provider: str = ""):
-        header = f"{provider}: {email}" if provider else email
+    def print_account_header(
+        self, email: str, provider: str = "", alias: str = "", group: str = ""
+    ):
+        if alias:
+            display_name = alias
+            metadata = f"{email}|{group}" if group else email
+        else:
+            display_name = email
+            metadata = group
+
+        header = f"{provider}: {display_name}" if provider else display_name
+        if metadata:
+            header += f" [dim]({metadata})[/dim]"
         self.console.print(f"[dim]📧 {header}[/dim]")
 
     def filter_quotas(self, quotas, client, show_all=False):
@@ -17,8 +28,19 @@ class DisplayManager:
             return quotas
         return client.filter_quotas(quotas, show_all=show_all)
 
-    def draw_quota_bars(self, quotas, client, show_all=False):
+    def draw_quota_bars(self, quotas, client, show_all=False, query=None):
         filtered_quotas = self.filter_quotas(quotas, client, show_all=show_all)
+
+        if query:
+            queries = [query] if isinstance(query, str) else query
+            for q_str in queries:
+                q_lower = q_str.lower()
+                filtered_quotas = [
+                    q
+                    for q in filtered_quotas
+                    if q_lower in q.get("name", "").lower()
+                    or q_lower in q.get("display_name", "").lower()
+                ]
 
         if not filtered_quotas:
             if not quotas:

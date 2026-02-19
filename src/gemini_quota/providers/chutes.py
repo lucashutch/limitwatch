@@ -173,6 +173,9 @@ class ChutesProvider(BaseProvider):
                                 "name": f"Chutes Quota ({cid})",
                                 "display_name": display_name,
                                 "remaining_pct": remaining_pct,
+                                "remaining": remaining,
+                                "limit": int(limit),
+                                "used": int(used),
                                 "reset": next_reset,
                                 "source_type": "Chutes",
                             }
@@ -199,6 +202,9 @@ class ChutesProvider(BaseProvider):
                                 "name": f"Chutes Quota ({chute_id})",
                                 "display_name": display_name,
                                 "remaining_pct": remaining_pct,
+                                "remaining": remaining,
+                                "limit": int(limit),
+                                "used": int(used),
                                 "reset": next_reset,
                                 "source_type": "Chutes",
                             }
