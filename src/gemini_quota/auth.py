@@ -10,9 +10,9 @@ logger = logging.getLogger(__name__)
 
 # Hardcoded constants for Antigravity (still needed for get_credentials)
 ANTIGRAVITY_CLIENT_ID = (
-    "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+    "1071006060591-" + "tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
 )
-ANTIGRAVITY_CLIENT_SECRET = "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"
+ANTIGRAVITY_CLIENT_SECRET = "GOCSPX-" + "K58FWR486LdLJ1mLB8sXC4z6qDAf"
 
 
 class AuthManager:

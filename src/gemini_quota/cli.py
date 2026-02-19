@@ -228,7 +228,8 @@ def main(
             email, quotas, client, error = idx_to_result[idx]
 
             if not json_output:
-                display.print_account_header(email)
+                provider_name = client.provider.provider_name if client else ""
+                display.print_account_header(email, provider=provider_name)
                 if error:
                     display.console.print(f"[yellow]Warning:[/yellow] {error}")
                     display.console.print("━" * 50)
