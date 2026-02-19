@@ -96,9 +96,14 @@ class AuthManager:
         self.save_accounts()
         return email
 
-    def logout(self, email: str) -> bool:
+    def logout(self, identifier: str) -> bool:
+        """Logout an account by email or alias."""
         initial_len = len(self.accounts)
-        self.accounts = [a for a in self.accounts if a.get("email") != email]
+        self.accounts = [
+            a
+            for a in self.accounts
+            if a.get("email") != identifier and a.get("alias") != identifier
+        ]
         if len(self.accounts) < initial_len:
             self.save_accounts()
             return True
@@ -108,3 +113,23 @@ class AuthManager:
         self.accounts = []
         self.active_index = 0
         self.save_accounts()
+
+    def update_account_metadata(self, email: str, metadata: Dict[str, Any]) -> bool:
+        """Update metadata (like alias or group) for an account by email."""
+        found = False
+        for acc in self.accounts:
+            if acc.get("email") == email:
+                for key, value in metadata.items():
+                    # Clear keys if value is None, empty string, or "none" (case insensitive)
+                    if value is None or (
+                        isinstance(value, str)
+                        and (value == "" or value.lower() == "none")
+                    ):
+                        if key in acc:
+                            del acc[key]
+                    else:
+                        acc[key] = value
+                found = True
+        if found:
+            self.save_accounts()
+        return found

@@ -1,4 +1,3 @@
-import json
 from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
 from gemini_quota.cli import main

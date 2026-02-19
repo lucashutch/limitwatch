@@ -8,8 +8,19 @@ class DisplayManager:
     def print_main_header(self):
         self.console.print("\n[bold blue]Quota Status[/bold blue]")
 
-    def print_account_header(self, email: str, provider: str = ""):
-        header = f"{provider}: {email}" if provider else email
+    def print_account_header(
+        self, email: str, provider: str = "", alias: str = "", group: str = ""
+    ):
+        if alias:
+            display_name = alias
+            metadata = f"{email}|{group}" if group else email
+        else:
+            display_name = email
+            metadata = group
+
+        header = f"{provider}: {display_name}" if provider else display_name
+        if metadata:
+            header += f" [dim]({metadata})[/dim]"
         self.console.print(f"[dim]📧 {header}[/dim]")
 
     def filter_quotas(self, quotas, client, show_all=False):

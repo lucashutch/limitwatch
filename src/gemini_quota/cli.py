@@ -42,6 +42,12 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
 @click.version_option(__version__, "--version", "-v", prog_name="gemini-quota")
 @click.option("-a", "--account", help="Email of the account to check.")
+@click.option("--alias", help="Set an alias for an account (requires --account).")
+@click.option(
+    "-g",
+    "--group",
+    help="Filter by group or set a group for an account (setting requires --account).",
+)
 @click.option("-p", "--provider", help="Filter by provider (e.g., google, chutes).")
 @click.option(
     "-q",
@@ -66,6 +72,8 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
 @click.option("--verbose", is_flag=True, help="Enable verbose logging.")
 def main(
     account,
+    alias,
+    group,
     provider,
     query,
     refresh,
@@ -179,24 +187,50 @@ def main(
                 print(json.dumps({"status": "error", "message": "No accounts found"}))
             return
 
-        # If project_id is provided without --login, we might want to update an account
-        if project_id and account:
-            acc = next((a for a in accounts if a.get("email") == account), None)
-            if acc:
-                acc["projectId"] = project_id
-                acc["managedProjectId"] = project_id
-                auth_mgr.save_accounts()
+        # If metadata is provided with --account, update the account
+        if account and (
+            alias is not None or group is not None or project_id is not None
+        ):
+            # Find the account(s) matching this email or alias
+            target_accounts = [
+                a
+                for a in accounts
+                if a.get("email") == account or a.get("alias") == account
+            ]
+            if target_accounts:
+                for target_acc in target_accounts:
+                    email_to_update = target_acc.get("email")
+                    metadata = {}
+                    if alias is not None:
+                        metadata["alias"] = alias
+                    if group is not None:
+                        metadata["group"] = group
+                    if project_id is not None:
+                        metadata["projectId"] = project_id
+                        metadata["managedProjectId"] = project_id
+
+                    if auth_mgr.update_account_metadata(email_to_update, metadata):
+                        if not json_output:
+                            display.console.print(
+                                f"[green]Updated metadata for [bold]{email_to_update}[/bold][/green]"
+                            )
+            else:
                 if not json_output:
                     display.console.print(
-                        f"[green]Updated project ID for [bold]{account}[/bold] to [bold]{project_id}[/bold][/green]"
+                        f"[red]Error:[/red] Account [bold]{account}[/bold] not found."
                     )
+                return
 
         # Filter accounts
         indices_to_check = []
         for i, a in enumerate(accounts):
-            if account and a.get("email") != account:
-                continue
+            if account:
+                # If account is provided, match by email or alias
+                if a.get("email") != account and a.get("alias") != account:
+                    continue
             if provider and a.get("type", "google") != provider:
+                continue
+            if group and not account and a.get("group") != group:
                 continue
             indices_to_check.append((i, a))
 
@@ -208,7 +242,7 @@ def main(
                     )
                 else:
                     display.console.print(
-                        f"[red]Error:[/red] No accounts matching filters."
+                        "[red]Error:[/red] No accounts matching filters."
                     )
             elif json_output:
                 print(json.dumps({"status": "error", "message": "No accounts found"}))
@@ -254,14 +288,18 @@ def main(
         results = []
         any_query_matches = False
 
-        for idx, _ in indices_to_check:
+        for idx, acc_data in indices_to_check:
             email, quotas, client, error = idx_to_result[idx]
+            alias = acc_data.get("alias", "")
+            group_val = acc_data.get("group", "")
 
             if not json_output:
                 if error:
                     if not query:
                         provider_name = client.provider.provider_name if client else ""
-                        display.print_account_header(email, provider=provider_name)
+                        display.print_account_header(
+                            email, provider=provider_name, alias=alias, group=group_val
+                        )
                         display.console.print(f"[yellow]Warning:[/yellow] {error}")
                         display.console.print("━" * 50)
                     continue
@@ -284,7 +322,9 @@ def main(
 
                 if not filtered_quotas and not query:
                     provider_name = client.provider.provider_name if client else ""
-                    display.print_account_header(email, provider=provider_name)
+                    display.print_account_header(
+                        email, provider=provider_name, alias=alias, group=group_val
+                    )
                     display.draw_quota_bars(quotas, client=client, show_all=show_all)
                     display.console.print("━" * 50)
                     continue
@@ -292,14 +332,18 @@ def main(
                 if query:
                     if filtered_quotas:
                         provider_name = client.provider.provider_name if client else ""
-                        display.print_account_header(email, provider=provider_name)
+                        display.print_account_header(
+                            email, provider=provider_name, alias=alias, group=group_val
+                        )
                         display.draw_quota_bars(
                             quotas, client=client, show_all=show_all, query=query
                         )
                         display.console.print("━" * 50)
                 else:
                     provider_name = client.provider.provider_name if client else ""
-                    display.print_account_header(email, provider=provider_name)
+                    display.print_account_header(
+                        email, provider=provider_name, alias=alias, group=group_val
+                    )
                     display.draw_quota_bars(quotas, client=client, show_all=show_all)
                     display.console.print("━" * 50)
             else:
@@ -321,6 +365,8 @@ def main(
                 results.append(
                     {
                         "email": email,
+                        "alias": alias,
+                        "group": group_val,
                         "quotas": filtered_quotas,
                         "error": error,
                     }

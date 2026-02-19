@@ -8,11 +8,11 @@
 - [x] Support filtering by provider/account in query mode.
 
 ### 2. Account Aliasing/Grouping
-- [ ] Update `AuthManager` to store an optional `alias` or `group` for each account.
-- [ ] Add CLI command/option to set or update aliases (e.g., `gemini-quota --account <email> --alias work`).
-- [ ] Add CLI command/option to set or update groups (e.g., `gemini-quota --account <email> --group home`).
-- [ ] Add CLI command/option to filter output based on alias or groups (e.g., `gemini-quota --group home`). will only show quotas in the home group.
-- [ ] Update `DisplayManager` to show aliases/groups in headers instead of emails when available.
+- [x] Update `AuthManager` to store an optional `alias` or `group` for each account.
+- [x] Add CLI command/option to set or update aliases (e.g., `gemini-quota --account <email> --alias work`).
+- [x] Add CLI command/option to set or update groups (e.g., `gemini-quota --account <email> --group home`).
+- [x] Add CLI command/option to filter output based on alias or groups (e.g., `gemini-quota -g home`). will only show quotas in the home group.
+- [x] Update `DisplayManager` to show aliases/groups in headers instead of emails when available.
 
 ### 3. Compact View
 - [ ] Add `--compact` / `-c` flag for a dense, one-line-per-quota summary.
