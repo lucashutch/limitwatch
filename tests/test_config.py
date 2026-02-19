@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from gemini_quota.config import Config
 
 
@@ -20,3 +21,16 @@ def test_config_save(tmp_path):
     with open(config_file, "r") as f:
         data = json.load(f)
     assert data["test_key"] == "test_value"
+
+
+def test_config_load_invalid_json(tmp_path):
+    config_file = tmp_path / "config.json"
+    config_file.write_text("invalid json")
+
+    config = Config(config_dir=tmp_path)
+    assert config.data == {}
+
+
+def test_config_default_paths():
+    config = Config()
+    assert ".config/gemini-quota" in str(config.config_dir)
