@@ -145,15 +145,18 @@ def test_cli_update_project_id(mock_auth_mgr_cls, mock_config_cls):
     mock_auth_mgr = mock_auth_mgr_cls.return_value
     accounts = [{"email": "test@example.com", "type": "google"}]
     mock_auth_mgr.load_accounts.return_value = accounts
+    mock_auth_mgr.update_account_metadata.return_value = True
 
     runner = CliRunner()
     result = runner.invoke(
         main, ["--account", "test@example.com", "--project-id", "new-id"]
     )
     assert result.exit_code == 0
-    assert "Updated project ID for test@example.com" in result.output
-    assert accounts[0]["projectId"] == "new-id"
-    mock_auth_mgr.save_accounts.assert_called_once()
+    assert "Updated metadata for test@example.com" in result.output
+    mock_auth_mgr.update_account_metadata.assert_called_once_with(
+        "test@example.com",
+        {"projectId": "new-id", "managedProjectId": "new-id"},
+    )
 
 
 @patch("gemini_quota.cli.Config")

@@ -42,6 +42,19 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
 @click.version_option(__version__, "--version", "-v", prog_name="gemini-quota")
 @click.option("-a", "--account", help="Email of the account to check.")
+@click.option("--alias", help="Set an alias for an account (requires --account).")
+@click.option(
+    "-g",
+    "--group",
+    help="Filter by group or set a group for an account (setting requires --account).",
+)
+@click.option("-p", "--provider", help="Filter by provider (e.g., google, chutes).")
+@click.option(
+    "-q",
+    "--query",
+    multiple=True,
+    help="Filter models by name (case-insensitive). Can be specified multiple times for an AND match.",
+)
 @click.option("-r", "--refresh", is_flag=True, help="Force refresh of OAuth tokens.")
 @click.option(
     "-s", "--show-all", is_flag=True, help="Show all models including Gemini 2.0/2.5."
@@ -51,7 +64,6 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
 )
 @click.option("-l", "--login", is_flag=True, help="Login to a new account.")
 @click.option(
-    "-p",
     "--project-id",
     help="Manually specify a Google Cloud Project ID for an account.",
 )
@@ -60,6 +72,10 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
 @click.option("--verbose", is_flag=True, help="Enable verbose logging.")
 def main(
     account,
+    alias,
+    group,
+    provider,
+    query,
     refresh,
     show_all,
     json_output,
@@ -104,8 +120,10 @@ def main(
                 account_data = client.provider.interactive_login(display)
                 email = auth_mgr.login(account_data)
             else:
-                # For non-interactive JSON output, we default to Google login
-                client = QuotaClient(account_data={"type": "google"})
+                # For non-interactive or JSON output, we default to Google login
+                # unless provider is specified
+                p_type = provider if provider in ["google", "chutes"] else "google"
+                client = QuotaClient(account_data={"type": p_type})
                 account_data = client.provider.login()
                 email = auth_mgr.login(account_data)
 
@@ -113,13 +131,13 @@ def main(
                 display.console.print(
                     f"[green]Successfully logged in as [bold]{email}[/bold][/green]"
                 )
-            else:
+            elif json_output:
                 print(json.dumps({"status": "success", "email": email}))
             return
         except Exception as e:
             if not json_output:
                 display.console.print(f"[red]Login failed:[/red] {e}")
-            else:
+            elif json_output:
                 print(json.dumps({"status": "error", "message": str(e)}))
             return
 
@@ -134,7 +152,7 @@ def main(
                 display.console.print(
                     f"[yellow]Account [bold]{logout}[/bold] not found.[/yellow]"
                 )
-        else:
+        elif json_output:
             print(json.dumps({"status": "success" if success else "not_found"}))
         return
 
@@ -144,51 +162,95 @@ def main(
             display.console.print(
                 "[green]Successfully logged out from all accounts.[/green]"
             )
-        else:
+        elif json_output:
             print(json.dumps({"status": "success"}))
         return
 
     if not auth_path.exists():
-        display.console.print(
-            f"[red]Error:[/red] Accounts file not found at [bold]{auth_path}[/bold]"
-        )
-        display.console.print("Please login with [bold]--login[/bold] to authenticate.")
+        if not json_output:
+            display.console.print(
+                f"[red]Error:[/red] Accounts file not found at [bold]{auth_path}[/bold]"
+            )
+            display.console.print(
+                "Please login with [bold]--login[/bold] to authenticate."
+            )
+        elif json_output:
+            print(json.dumps({"status": "error", "message": "Accounts file not found"}))
         return
 
     try:
         accounts = auth_mgr.load_accounts()
         if not accounts:
-            display.console.print("[red]Error:[/red] No accounts found in file.")
+            if not json_output:
+                display.console.print("[red]Error:[/red] No accounts found in file.")
+            elif json_output:
+                print(json.dumps({"status": "error", "message": "No accounts found"}))
             return
 
-        # If project_id is provided without --login, we might want to update an account
-        if project_id and account:
-            acc = next((a for a in accounts if a.get("email") == account), None)
-            if acc:
-                acc["projectId"] = project_id
-                acc["managedProjectId"] = project_id
-                auth_mgr.save_accounts()
+        # If metadata is provided with --account, update the account
+        if account and (
+            alias is not None or group is not None or project_id is not None
+        ):
+            # Find the account(s) matching this email or alias
+            target_accounts = [
+                a
+                for a in accounts
+                if a.get("email") == account or a.get("alias") == account
+            ]
+            if target_accounts:
+                for target_acc in target_accounts:
+                    email_to_update = target_acc.get("email")
+                    metadata = {}
+                    if alias is not None:
+                        metadata["alias"] = alias
+                    if group is not None:
+                        metadata["group"] = group
+                    if project_id is not None:
+                        metadata["projectId"] = project_id
+                        metadata["managedProjectId"] = project_id
+
+                    if auth_mgr.update_account_metadata(email_to_update, metadata):
+                        if not json_output:
+                            display.console.print(
+                                f"[green]Updated metadata for [bold]{email_to_update}[/bold][/green]"
+                            )
+            else:
                 if not json_output:
                     display.console.print(
-                        f"[green]Updated project ID for [bold]{account}[/bold] to [bold]{project_id}[/bold][/green]"
+                        f"[red]Error:[/red] Account [bold]{account}[/bold] not found."
                     )
+                return
+
+        # Filter accounts
+        indices_to_check = []
+        for i, a in enumerate(accounts):
+            if account:
+                # If account is provided, match by email or alias
+                if a.get("email") != account and a.get("alias") != account:
+                    continue
+            if provider and a.get("type", "google") != provider:
+                continue
+            if group and not account and a.get("group") != group:
+                continue
+            indices_to_check.append((i, a))
+
+        if not indices_to_check:
+            if not json_output:
+                if account:
+                    display.console.print(
+                        f"[red]Error:[/red] Account [bold]{account}[/bold] not found."
+                    )
+                else:
+                    display.console.print(
+                        "[red]Error:[/red] No accounts matching filters."
+                    )
+            elif json_output:
+                print(json.dumps({"status": "error", "message": "No accounts found"}))
+            return
 
         # Print main header once
-        if not json_output:
+        if not json_output and not query:
             display.print_main_header()
-
-        # Filter accounts if requested
-        if account:
-            indices_to_check = [
-                (i, a) for i, a in enumerate(accounts) if a.get("email") == account
-            ]
-            if not indices_to_check:
-                display.console.print(
-                    f"[red]Error:[/red] Account [bold]{account}[/bold] not found."
-                )
-                return
-        else:
-            indices_to_check = list(enumerate(accounts))
 
         # Use indices_to_check to maintain original order
         idx_to_result = {idx: None for idx, _ in indices_to_check}
@@ -224,25 +286,87 @@ def main(
                     idx_to_result[idx] = future.result()
 
         results = []
-        for idx, _ in indices_to_check:
+        any_query_matches = False
+
+        for idx, acc_data in indices_to_check:
             email, quotas, client, error = idx_to_result[idx]
+            alias = acc_data.get("alias", "")
+            group_val = acc_data.get("group", "")
 
             if not json_output:
-                provider_name = client.provider.provider_name if client else ""
-                display.print_account_header(email, provider=provider_name)
                 if error:
-                    display.console.print(f"[yellow]Warning:[/yellow] {error}")
+                    if not query:
+                        provider_name = client.provider.provider_name if client else ""
+                        display.print_account_header(
+                            email, provider=provider_name, alias=alias, group=group_val
+                        )
+                        display.console.print(f"[yellow]Warning:[/yellow] {error}")
+                        display.console.print("━" * 50)
+                    continue
+
+                filtered_quotas = display.filter_quotas(
+                    quotas, client=client, show_all=show_all
+                )
+
+                if query:
+                    for q_str in query:
+                        q_lower = q_str.lower()
+                        filtered_quotas = [
+                            q
+                            for q in filtered_quotas
+                            if q_lower in q.get("name", "").lower()
+                            or q_lower in q.get("display_name", "").lower()
+                        ]
+                    if filtered_quotas:
+                        any_query_matches = True
+
+                if not filtered_quotas and not query:
+                    provider_name = client.provider.provider_name if client else ""
+                    display.print_account_header(
+                        email, provider=provider_name, alias=alias, group=group_val
+                    )
+                    display.draw_quota_bars(quotas, client=client, show_all=show_all)
                     display.console.print("━" * 50)
                     continue
-                display.draw_quota_bars(quotas, client=client, show_all=show_all)
-                display.console.print("━" * 50)
+
+                if query:
+                    if filtered_quotas:
+                        provider_name = client.provider.provider_name if client else ""
+                        display.print_account_header(
+                            email, provider=provider_name, alias=alias, group=group_val
+                        )
+                        display.draw_quota_bars(
+                            quotas, client=client, show_all=show_all, query=query
+                        )
+                        display.console.print("━" * 50)
+                else:
+                    provider_name = client.provider.provider_name if client else ""
+                    display.print_account_header(
+                        email, provider=provider_name, alias=alias, group=group_val
+                    )
+                    display.draw_quota_bars(quotas, client=client, show_all=show_all)
+                    display.console.print("━" * 50)
             else:
                 filtered_quotas = display.filter_quotas(
                     quotas, client=client, show_all=show_all
                 )
+                if query:
+                    for q_str in query:
+                        q_lower = q_str.lower()
+                        filtered_quotas = [
+                            q
+                            for q in filtered_quotas
+                            if q_lower in q.get("name", "").lower()
+                            or q_lower in q.get("display_name", "").lower()
+                        ]
+                    if filtered_quotas:
+                        any_query_matches = True
+
                 results.append(
                     {
                         "email": email,
+                        "alias": alias,
+                        "group": group_val,
                         "quotas": filtered_quotas,
                         "error": error,
                     }
@@ -250,6 +374,11 @@ def main(
 
         if json_output:
             print(json.dumps(results, indent=2))
+
+        if query and not any_query_matches:
+            import sys
+
+            sys.exit(1)
 
     except Exception as e:
         display.console.print(f"[red]Error:[/red] {e}")
