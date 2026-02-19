@@ -321,6 +321,9 @@ class GoogleProvider(BaseProvider):
             "managedProjectId"
         )
 
+        if not services:
+            return []
+
         quotas = []
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=len(services)

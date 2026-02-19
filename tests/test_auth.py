@@ -1,3 +1,4 @@
+import pytest
 from unittest.mock import MagicMock, patch
 from gemini_quota.auth import AuthManager
 
@@ -63,3 +64,70 @@ def test_auth_manager_login_chutes(mock_get, tmp_path):
     assert len(auth_mgr.accounts) == 1
     assert auth_mgr.accounts[0]["type"] == "chutes"
     assert auth_mgr.accounts[0]["apiKey"] == "fake_api_key"
+
+
+def test_auth_manager_save_load(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+
+    auth_mgr.accounts = [{"email": "test@example.com", "type": "google"}]
+    auth_mgr.active_index = 0
+    auth_mgr.save_accounts()
+
+    assert auth_file.exists()
+
+    new_mgr = AuthManager(auth_file)
+    assert len(new_mgr.accounts) == 1
+    assert new_mgr.accounts[0]["email"] == "test@example.com"
+
+
+def test_auth_manager_logout(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+    auth_mgr.accounts = [{"email": "test@example.com"}, {"email": "other@example.com"}]
+
+    assert auth_mgr.logout("test@example.com") is True
+    assert len(auth_mgr.accounts) == 1
+    assert auth_mgr.accounts[0]["email"] == "other@example.com"
+
+    assert auth_mgr.logout("nonexistent@example.com") is False
+
+
+def test_auth_manager_logout_all(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+    auth_mgr.accounts = [{"email": "test@example.com"}]
+
+    auth_mgr.logout_all()
+    assert len(auth_mgr.accounts) == 0
+
+
+def test_auth_manager_get_credentials(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+    auth_mgr.accounts = [
+        {"email": "test@example.com", "refreshToken": "token1", "type": "google"},
+        {"email": "no-token@example.com", "type": "google"},
+    ]
+
+    creds = auth_mgr.get_credentials(0)
+    assert creds is not None
+    assert creds.refresh_token == "token1"
+
+    assert auth_mgr.get_credentials(1) is None
+    assert auth_mgr.get_credentials(99) is None
+
+
+def test_auth_manager_load_accounts_error(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_file.write_text("invalid json")
+
+    auth_mgr = AuthManager(auth_file)
+    assert auth_mgr.accounts == []
+
+
+def test_auth_manager_login_missing_data(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+    with pytest.raises(Exception, match="Account data missing"):
+        auth_mgr.login({})

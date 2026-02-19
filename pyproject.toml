@@ -30,8 +30,14 @@ packages = ["src/gemini_quota"]
 [dependency-groups]
 dev = [
     "pytest>=7.3.1",
+    "pytest-cov>=7.0.0",
     "pytest-sugar>=1.0.0",
 ]
 
 [tool.uv]
 package = true
+
+[tool.pytest.ini_options]
+addopts = "--cov=src/gemini_quota --cov-report=term-missing"
+testpaths = ["tests"]
+pythonpath = ["src"]
