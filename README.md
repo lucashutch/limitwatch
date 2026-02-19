@@ -71,7 +71,7 @@ The tool stores configuration and account data in:
 ## Development
 
 ### Running Tests
-The project uses `pytest` for unit testing.
+The project uses `pytest` for unit testing. Coverage reporting is enabled by default.
 ```bash
 uv run pytest
 ```

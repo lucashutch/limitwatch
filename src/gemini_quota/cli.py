@@ -22,12 +22,12 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
     if account_type == "google":
         creds = auth_mgr.get_credentials(idx)
         if not creds:
-            return email, None, f"Could not load credentials for {email}"
+            return email, None, None, f"Could not load credentials for {email}"
         try:
             # Refresh token
             auth_mgr.refresh_credentials(creds)
         except Exception as e:
-            return email, None, f"Token refresh failed: {e}"
+            return email, None, None, f"Token refresh failed: {e}"
 
     try:
         # Initialize Client with account data and credentials

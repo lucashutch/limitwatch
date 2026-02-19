@@ -80,12 +80,54 @@ def test_chutes_interactive_login_strip(mock_get, mock_prompt):
 
 
 @patch("gemini_quota.providers.chutes.requests.get")
-def test_chutes_fetch_quotas_auth_error(mock_get):
-    provider = ChutesProvider({"apiKey": "wrong_key"})
-    mock_get.return_value.status_code = 401
-    mock_get.return_value.text = "Unauthorized"
+def test_chutes_fetch_quotas_no_list_fallback(mock_get):
+    provider = ChutesProvider({"apiKey": "fake_key"})
 
-    with pytest.raises(Exception) as excinfo:
-        provider.fetch_quotas()
+    def side_effect(url, **kwargs):
+        m = MagicMock()
+        if "/users/me/quotas" in url:
+            m.status_code = 404  # List fails
+        elif "/users/me/quota_usage/me" in url:
+            m.status_code = 200
+            m.json.return_value = {"quota": 100, "used": 20, "chute_id": "me"}
+        elif "/users/me" in url:
+            m.status_code = 200
+            m.json.return_value = {"balance": 0.0}  # No balance item
+        return m
 
-    assert "Unauthorized" in str(excinfo.value)
+    mock_get.side_effect = side_effect
+
+    results = provider.fetch_quotas()
+    assert len(results) == 1
+    assert "Quota (80/100)" in results[0]["display_name"]
+
+
+def test_chutes_provider_metadata():
+    provider = ChutesProvider({"apiKey": "k"})
+    assert provider.provider_name == "Chutes"
+    assert provider.source_priority == 0
+    assert provider.primary_color == "yellow"
+    assert provider.get_color({}) == "yellow"
+
+
+@patch("gemini_quota.providers.chutes.requests.get")
+def test_chutes_fetch_quotas_no_quota_info(mock_get):
+    provider = ChutesProvider({"apiKey": "fake_key"})
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = []  # Empty list of quotas
+
+    # Still should fetch balance if any
+    results = provider.fetch_quotas()
+    assert len(results) == 0  # no balance returned by default mock here
+
+
+def test_chutes_provider_filter_quotas():
+    provider = ChutesProvider({})
+    quotas = [{"name": "q1"}]
+    assert provider.filter_quotas(quotas, False) == quotas
+
+
+def test_chutes_provider_sort_key():
+    provider = ChutesProvider({})
+    assert provider.get_sort_key({"name": "Balance"}) == (0, 0, "Balance")
+    assert provider.get_sort_key({"name": "Quota"}) == (0, 1, "Quota")

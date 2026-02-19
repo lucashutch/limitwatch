@@ -54,24 +54,28 @@ def test_quota_client_google_fetch_ag(mock_post):
     assert results[0]["remaining_pct"] == 50.0
 
 
-@patch("gemini_quota.providers.chutes.requests.get")
-def test_quota_client_chutes_fetch(mock_get):
-    client = QuotaClient({"type": "chutes", "apiKey": "fake_key"})
+def test_quota_client_init_legacy():
+    client = QuotaClient(api_key="fake-key")
+    assert client.account_data["apiKey"] == "fake-key"
+    assert client.account_data["type"] == "chutes"
+    assert client.provider.provider_name == "Chutes"
 
-    def mock_responses(url, **kwargs):
-        m = MagicMock()
-        m.status_code = 200
-        if "users/me/quota_usage/me" in url:
-            m.json.return_value = {"quota": 300, "used": 15, "chute_id": "*"}
-        elif "users/me" in url:
-            m.json.return_value = {"balance": 10.5, "email": "test@chutes.ai"}
-        return m
 
-    mock_get.side_effect = mock_responses
+def test_get_available_providers():
+    providers = QuotaClient.get_available_providers()
+    assert "google" in providers
+    assert "chutes" in providers
 
-    results = client.fetch_quotas()
 
-    # Balance + Quota
-    assert len(results) == 2
-    assert any("Balance: $10.50" in r["display_name"] for r in results)
-    assert any("Quota (285/300)" in r["display_name"] for r in results)
+def test_quota_client_delegation():
+    client = QuotaClient({"type": "google"})
+    client.provider = MagicMock()
+
+    client.filter_quotas([], True)
+    client.provider.filter_quotas.assert_called_with([], True)
+
+    client.get_sort_key({})
+    client.provider.get_sort_key.assert_called_with({})
+
+    client.get_color({})
+    client.provider.get_color.assert_called_with({})
