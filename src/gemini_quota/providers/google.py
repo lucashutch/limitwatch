@@ -55,12 +55,20 @@ class GoogleProvider(BaseProvider):
 
         # Group by source to check for premium models per source
         has_premium_cli = any(
-            ("3" in q.get("display_name", "") or "Claude" in q.get("display_name", ""))
+            (
+                "Gemini Pro" in q.get("display_name", "")
+                or "Gemini Flash" in q.get("display_name", "")
+                or "Claude" in q.get("display_name", "")
+            )
             and q.get("source_type") == "Gemini CLI"
             for q in quotas
         )
         has_premium_ag = any(
-            ("3" in q.get("display_name", "") or "Claude" in q.get("display_name", ""))
+            (
+                "Gemini Pro" in q.get("display_name", "")
+                or "Gemini Flash" in q.get("display_name", "")
+                or "Claude" in q.get("display_name", "")
+            )
             and q.get("source_type") == "Antigravity"
             for q in quotas
         )
@@ -71,7 +79,9 @@ class GoogleProvider(BaseProvider):
             source = q.get("source_type", "")
             if "2.0" in name:
                 continue
-            is_premium = "3" in name or "Claude" in name
+            is_premium = (
+                "Gemini Pro" in name or "Gemini Flash" in name or "Claude" in name
+            )
             if is_premium:
                 filtered.append(q)
             elif source == "Gemini CLI" and not has_premium_cli:
@@ -91,16 +101,12 @@ class GoogleProvider(BaseProvider):
             family_prio = 1
         elif "Gemini 2.5 Pro" in name:
             family_prio = 2
-        elif "Gemini 3 Flash" in name:
+        elif "Gemini Flash" in name:
             family_prio = 3
-        elif "Gemini 3 Pro" in name:
+        elif "Gemini Pro" in name:
             family_prio = 4
-        elif "Gemini 3.1 Flash" in name:
-            family_prio = 5
-        elif "Gemini 3.1 Pro" in name:
-            family_prio = 6
         elif "Claude" in name:
-            family_prio = 7
+            family_prio = 5
         return source_prio, family_prio, name
 
     def interactive_login(self, display_manager: Any) -> Dict[str, Any]:
@@ -355,8 +361,8 @@ class GoogleProvider(BaseProvider):
             if cached:
                 # Mapping from cached keys to display names
                 family_map = {
-                    "gemini-pro": "Gemini 3 Pro (AG)",
-                    "gemini-flash": "Gemini 3 Flash (AG)",
+                    "gemini-pro": "Gemini Pro (AG)",
+                    "gemini-flash": "Gemini Flash (AG)",
                     "claude": "Claude (AG)",
                     "gemini-2.5-flash": "Gemini 2.5 Flash (AG)",
                     "gemini-2.5-pro": "Gemini 2.5 Pro (AG)",
@@ -423,14 +429,10 @@ class GoogleProvider(BaseProvider):
                         continue
 
                     family = None
-                    if "gemini-3.1-pro" in model_id:
-                        family = "Gemini 3.1 Pro"
-                    elif "gemini-3.1-flash" in model_id:
-                        family = "Gemini 3.1 Flash"
-                    elif "gemini-3-pro" in model_id:
-                        family = "Gemini 3 Pro"
-                    elif "gemini-3-flash" in model_id:
-                        family = "Gemini 3 Flash"
+                    if "gemini-3.1-pro" in model_id or "gemini-3-pro" in model_id:
+                        family = "Gemini Pro"
+                    elif "gemini-3.1-flash" in model_id or "gemini-3-flash" in model_id:
+                        family = "Gemini Flash"
                     elif "gemini-2.5-pro" in model_id:
                         family = "Gemini 2.5 Pro"
                     elif "gemini-2.5-flash" in model_id:
@@ -561,23 +563,17 @@ class GoogleProvider(BaseProvider):
                             elif (
                                 "gemini 3.1 pro" in lower_name
                                 or "gemini-3.1-pro" in lower_id
+                                or "gemini 3 pro" in lower_name
+                                or "gemini-3-pro" in lower_id
                             ):
-                                family = "Gemini 3.1 Pro"
+                                family = "Gemini Pro"
                             elif (
                                 "gemini 3.1 flash" in lower_name
                                 or "gemini-3.1-flash" in lower_id
-                            ):
-                                family = "Gemini 3.1 Flash"
-                            elif (
-                                "gemini 3 pro" in lower_name
-                                or "gemini-3-pro" in lower_id
-                            ):
-                                family = "Gemini 3 Pro"
-                            elif (
-                                "gemini 3 flash" in lower_name
+                                or "gemini 3 flash" in lower_name
                                 or "gemini-3-flash" in lower_id
                             ):
-                                family = "Gemini 3 Flash"
+                                family = "Gemini Flash"
                             elif (
                                 "gemini 2.5 flash" in lower_name
                                 or "gemini-2.5-flash" in lower_id

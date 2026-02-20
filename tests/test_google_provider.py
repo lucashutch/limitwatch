@@ -20,7 +20,7 @@ def test_google_provider_filter_quotas():
     provider = GoogleProvider({"type": "google"})
 
     quotas = [
-        {"display_name": "Gemini 3 Pro (CLI)", "source_type": "Gemini CLI"},
+        {"display_name": "Gemini Pro (CLI)", "source_type": "Gemini CLI"},
         {"display_name": "Gemini 2.0 Flash (CLI)", "source_type": "Gemini CLI"},
         {"display_name": "Gemini 1.5 Flash (CLI)", "source_type": "Gemini CLI"},
         {"display_name": "Claude (AG)", "source_type": "Antigravity"},
@@ -28,20 +28,20 @@ def test_google_provider_filter_quotas():
     ]
 
     # Default filtering (show_all=False)
-    # Should keep premium (3, Claude) and fallback (1.5 Flash if no premium in CLI)
+    # Should keep premium (Pro, Flash, Claude) and fallback (1.5 Flash if no premium in CLI)
     # Wait, 1.5 Flash (CLI) should be kept if no premium in CLI.
-    # But here Gemini 3 Pro (CLI) IS premium.
+    # But here Gemini Pro (CLI) IS premium.
 
     filtered = provider.filter_quotas(quotas, show_all=False)
 
     # Premium should be there
-    assert any("Gemini 3 Pro" in q["display_name"] for q in filtered)
+    assert any("Gemini Pro" in q["display_name"] for q in filtered)
     assert any("Claude" in q["display_name"] for q in filtered)
 
     # 2.0 should be removed
     assert not any("2.0" in q["display_name"] for q in filtered)
 
-    # 1.5 Flash (CLI) should be removed because Gemini 3 Pro (CLI) is present
+    # 1.5 Flash (CLI) should be removed because Gemini Pro (CLI) is present
     assert not any("Gemini 1.5 Flash (CLI)" == q["display_name"] for q in filtered)
 
     # 2.5 Flash (AG) should be removed because Claude (AG) is present
@@ -51,7 +51,7 @@ def test_google_provider_filter_quotas():
 def test_google_provider_get_sort_key():
     provider = GoogleProvider({"type": "google"})
 
-    q1 = {"display_name": "Gemini 3 Pro (CLI)", "source_type": "Gemini CLI"}
+    q1 = {"display_name": "Gemini Pro (CLI)", "source_type": "Gemini CLI"}
     q2 = {"display_name": "Gemini 2.0 Flash (CLI)", "source_type": "Gemini CLI"}
     q3 = {"display_name": "Claude (AG)", "source_type": "Antigravity"}
 
@@ -64,7 +64,7 @@ def test_google_provider_get_sort_key():
     assert key2[0] == 0
     assert key3[0] == 1
 
-    # 2.0 (0) before 3 (4)
+    # 2.0 (0) before Pro (4)
     assert key2[1] == 0
     assert key1[1] == 4
 
@@ -94,7 +94,7 @@ def test_fetch_gemini_cli_quotas(mock_post):
     quotas = provider._fetch_gemini_cli_quotas("test-project")
 
     assert len(quotas) == 2
-    assert any(q["display_name"] == "Gemini 3 Pro (CLI)" for q in quotas)
+    assert any(q["display_name"] == "Gemini Pro (CLI)" for q in quotas)
     assert any(q["display_name"] == "Gemini 2.5 Flash (CLI)" for q in quotas)
 
 
@@ -122,18 +122,13 @@ def test_fetch_antigravity_quotas(mock_post):
                 },
             },
         },
-        "remaining_fraction": 0.5,  # This is a bit weird in the code, it uses data['remaining_fraction'] which might be a bug in the code if it's not present at top level
+        "remaining_fraction": 0.5,
         "reset": "2026-02-19T20:00:00Z",
     }
 
-    # In GoogleProvider._fetch_antigravity_quotas:
-    # return [ { ..., "remaining_pct": data["remaining_fraction"] * 100, "reset": data["reset"], ... } ]
-    # It seems to use the TOP LEVEL remaining_fraction and reset from the response for ALL models?
-    # Let me re-read the code.
-
     quotas = provider._fetch_antigravity_quotas("test-project")
     assert len(quotas) == 2
-    assert any("Gemini 3 Pro (AG)" == q["display_name"] for q in quotas)
+    assert any("Gemini Pro (AG)" == q["display_name"] for q in quotas)
 
 
 @patch("gemini_quota.providers.google.InstalledAppFlow")
@@ -383,6 +378,7 @@ def test_google_provider_fetch_quotas_cached_more():
     account_data = {
         "type": "google",
         "cachedQuota": {
+            "gemini-pro": {"remainingFraction": 0.5},
             "gemini-flash": {"remainingFraction": 0.5},
             "claude": {"remainingFraction": 0.4},
             "gemini-2.5-flash": {"remainingFraction": 0.3},
@@ -395,7 +391,7 @@ def test_google_provider_fetch_quotas_cached_more():
         with patch.object(provider, "_fetch_antigravity_quotas", return_value=[]):
             quotas = provider.fetch_quotas()
 
-    assert any(q["display_name"] == "Gemini 3 Flash (AG)" for q in quotas)
+    assert any(q["display_name"] == "Gemini Flash (AG)" for q in quotas)
     assert any(q["display_name"] == "Claude (AG)" for q in quotas)
     assert any(q["display_name"] == "Gemini 2.5 Flash (AG)" for q in quotas)
     assert any(q["display_name"] == "Gemini 2.5 Pro (AG)" for q in quotas)
@@ -420,7 +416,7 @@ def test_fetch_gemini_cli_quotas_all_families(mock_post):
         "reset": "now",
     }
     quotas = provider._fetch_gemini_cli_quotas()
-    assert any("Gemini 3 Flash" in q["display_name"] for q in quotas)
+    assert any("Gemini Flash" in q["display_name"] for q in quotas)
     assert any("Gemini 2.5 Pro" in q["display_name"] for q in quotas)
     assert any("Gemini 2.0 Flash" in q["display_name"] for q in quotas)
     assert any("Gemini 1.5 Pro" in q["display_name"] for q in quotas)
@@ -452,7 +448,7 @@ def test_fetch_antigravity_quotas_all_families(mock_post):
         "reset": "now",
     }
     quotas = provider._fetch_antigravity_quotas()
-    assert any("Gemini 3 Flash" in q["display_name"] for q in quotas)
+    assert any("Gemini Flash" in q["display_name"] for q in quotas)
     assert any("Gemini 2.5 Flash" in q["display_name"] for q in quotas)
     assert any("Gemini 2.5 Pro" in q["display_name"] for q in quotas)
 
