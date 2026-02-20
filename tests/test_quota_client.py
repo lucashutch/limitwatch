@@ -23,7 +23,7 @@ def test_quota_client_google_fetch_cli(mock_post):
     results = client.fetch_quotas()
 
     assert len(results) == 1
-    assert results[0]["display_name"] == "Gemini 3 Pro (CLI)"
+    assert results[0]["display_name"] == "Gemini Pro (CLI)"
     assert results[0]["remaining_pct"] == 80.0
 
 
