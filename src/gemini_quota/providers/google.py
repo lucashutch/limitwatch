@@ -399,7 +399,12 @@ class GoogleProvider(BaseProvider):
 
         def make_request(p_id):
             body = {"project": p_id} if p_id else {}
-            return requests.post(url, headers=headers, json=body, timeout=10)
+            response = requests.post(url, headers=headers, json=body, timeout=10)
+            if response.status_code != 200:
+                logger.debug(
+                    f"CLI Quota Error ({p_id}) [{response.status_code}]: {response.text}"
+                )
+            return response
 
         try:
             response = make_request(project_id)
@@ -409,6 +414,7 @@ class GoogleProvider(BaseProvider):
 
             if response.status_code == 200:
                 data = response.json()
+                logger.debug(f"CLI Quota Success ({project_id}): {data}")
                 buckets = data.get("buckets", [])
                 groups = {}
                 for bucket in buckets:
@@ -461,6 +467,36 @@ class GoogleProvider(BaseProvider):
                     }
                     for family, data in groups.items()
                 ]
+            elif response.status_code == 403:
+                try:
+                    err_data = response.json()
+                    details = err_data.get("error", {}).get("details", [])
+                    for d in details:
+                        if d.get("reason") == "VALIDATION_REQUIRED":
+                            val_url = d.get("metadata", {}).get("validation_url")
+                            if val_url:
+                                return [
+                                    {
+                                        "name": "Validation Required",
+                                        "display_name": "Validation Required",
+                                        "is_error": True,
+                                        "message": "Verify your account to continue.",
+                                        "url": val_url,
+                                        "source_type": "Gemini CLI",
+                                    }
+                                ]
+                        elif d.get("reason") == "SUBSCRIPTION_REQUIRED":
+                            return [
+                                {
+                                    "name": "Subscription Required",
+                                    "display_name": "License Missing",
+                                    "is_error": True,
+                                    "message": " No Code Assist license found. Set a valid project with --project-id",
+                                    "source_type": "Gemini CLI",
+                                }
+                            ]
+                except Exception:
+                    pass
         except Exception:
             pass
         return []
@@ -479,7 +515,12 @@ class GoogleProvider(BaseProvider):
 
         def make_request(p_id):
             body = {"project": p_id} if p_id else {}
-            return requests.post(url, headers=headers, json=body, timeout=10)
+            response = requests.post(url, headers=headers, json=body, timeout=10)
+            if response.status_code != 200:
+                logger.debug(
+                    f"AG Quota Error ({p_id}) [{response.status_code}]: {response.text}"
+                )
+            return response
 
         try:
             response = make_request(project_id)
@@ -489,6 +530,7 @@ class GoogleProvider(BaseProvider):
 
             if response.status_code == 200:
                 data = response.json()
+                logger.debug(f"AG Quota Success ({project_id}): {data}")
                 models = data.get("models", {})
                 groups = {}
                 for model_id, info in models.items():
