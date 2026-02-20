@@ -77,6 +77,17 @@ class DisplayManager:
             padded_name = f"{name:22}"
             styled_name = f"[{name_color}]{padded_name}[/]"
 
+            if q.get("is_error"):
+                message = q.get("message", "Validation Required")
+                url = q.get("url", "")
+                if url:
+                    self.console.print(
+                        f"{styled_name} [red]⚠️ {message}[/red] [link={url}][dim]-> Click here to verify <-[/dim][/link]"
+                    )
+                else:
+                    self.console.print(f"{styled_name} [red]⚠️ {message}[/red]")
+                continue
+
             # Determine bar color based on REMAINING amount
             if remaining_pct <= 20:
                 bar_color = "red"
