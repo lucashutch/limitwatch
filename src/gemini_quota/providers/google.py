@@ -95,8 +95,12 @@ class GoogleProvider(BaseProvider):
             family_prio = 3
         elif "Gemini 3 Pro" in name:
             family_prio = 4
-        elif "Claude" in name:
+        elif "Gemini 3.1 Flash" in name:
             family_prio = 5
+        elif "Gemini 3.1 Pro" in name:
+            family_prio = 6
+        elif "Claude" in name:
+            family_prio = 7
         return source_prio, family_prio, name
 
     def interactive_login(self, display_manager: Any) -> Dict[str, Any]:
@@ -413,7 +417,11 @@ class GoogleProvider(BaseProvider):
                         continue
 
                     family = None
-                    if "gemini-3-pro" in model_id:
+                    if "gemini-3.1-pro" in model_id:
+                        family = "Gemini 3.1 Pro"
+                    elif "gemini-3.1-flash" in model_id:
+                        family = "Gemini 3.1 Flash"
+                    elif "gemini-3-pro" in model_id:
                         family = "Gemini 3 Pro"
                     elif "gemini-3-flash" in model_id:
                         family = "Gemini 3 Flash"
@@ -508,6 +516,16 @@ class GoogleProvider(BaseProvider):
                             family = "Other"
                             if "claude" in lower_name or "claude" in lower_id:
                                 family = "Claude"
+                            elif (
+                                "gemini 3.1 pro" in lower_name
+                                or "gemini-3.1-pro" in lower_id
+                            ):
+                                family = "Gemini 3.1 Pro"
+                            elif (
+                                "gemini 3.1 flash" in lower_name
+                                or "gemini-3.1-flash" in lower_id
+                            ):
+                                family = "Gemini 3.1 Flash"
                             elif (
                                 "gemini 3 pro" in lower_name
                                 or "gemini-3-pro" in lower_id
