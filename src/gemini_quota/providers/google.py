@@ -55,12 +55,20 @@ class GoogleProvider(BaseProvider):
 
         # Group by source to check for premium models per source
         has_premium_cli = any(
-            ("3" in q.get("display_name", "") or "Claude" in q.get("display_name", ""))
+            (
+                "Gemini Pro" in q.get("display_name", "")
+                or "Gemini Flash" in q.get("display_name", "")
+                or "Claude" in q.get("display_name", "")
+            )
             and q.get("source_type") == "Gemini CLI"
             for q in quotas
         )
         has_premium_ag = any(
-            ("3" in q.get("display_name", "") or "Claude" in q.get("display_name", ""))
+            (
+                "Gemini Pro" in q.get("display_name", "")
+                or "Gemini Flash" in q.get("display_name", "")
+                or "Claude" in q.get("display_name", "")
+            )
             and q.get("source_type") == "Antigravity"
             for q in quotas
         )
@@ -71,7 +79,9 @@ class GoogleProvider(BaseProvider):
             source = q.get("source_type", "")
             if "2.0" in name:
                 continue
-            is_premium = "3" in name or "Claude" in name
+            is_premium = (
+                "Gemini Pro" in name or "Gemini Flash" in name or "Claude" in name
+            )
             if is_premium:
                 filtered.append(q)
             elif source == "Gemini CLI" and not has_premium_cli:
@@ -91,9 +101,9 @@ class GoogleProvider(BaseProvider):
             family_prio = 1
         elif "Gemini 2.5 Pro" in name:
             family_prio = 2
-        elif "Gemini 3 Flash" in name:
+        elif "Gemini Flash" in name:
             family_prio = 3
-        elif "Gemini 3 Pro" in name:
+        elif "Gemini Pro" in name:
             family_prio = 4
         elif "Claude" in name:
             family_prio = 5
@@ -351,8 +361,8 @@ class GoogleProvider(BaseProvider):
             if cached:
                 # Mapping from cached keys to display names
                 family_map = {
-                    "gemini-pro": "Gemini 3 Pro (AG)",
-                    "gemini-flash": "Gemini 3 Flash (AG)",
+                    "gemini-pro": "Gemini Pro (AG)",
+                    "gemini-flash": "Gemini Flash (AG)",
                     "claude": "Claude (AG)",
                     "gemini-2.5-flash": "Gemini 2.5 Flash (AG)",
                     "gemini-2.5-pro": "Gemini 2.5 Pro (AG)",
@@ -395,7 +405,12 @@ class GoogleProvider(BaseProvider):
 
         def make_request(p_id):
             body = {"project": p_id} if p_id else {}
-            return requests.post(url, headers=headers, json=body, timeout=10)
+            response = requests.post(url, headers=headers, json=body, timeout=10)
+            if response.status_code != 200:
+                logger.debug(
+                    f"CLI Quota Error ({p_id}) [{response.status_code}]: {response.text}"
+                )
+            return response
 
         try:
             response = make_request(project_id)
@@ -405,6 +420,7 @@ class GoogleProvider(BaseProvider):
 
             if response.status_code == 200:
                 data = response.json()
+                logger.debug(f"CLI Quota Success ({project_id}): {data}")
                 buckets = data.get("buckets", [])
                 groups = {}
                 for bucket in buckets:
@@ -413,10 +429,10 @@ class GoogleProvider(BaseProvider):
                         continue
 
                     family = None
-                    if "gemini-3-pro" in model_id:
-                        family = "Gemini 3 Pro"
-                    elif "gemini-3-flash" in model_id:
-                        family = "Gemini 3 Flash"
+                    if "gemini-3.1-pro" in model_id or "gemini-3-pro" in model_id:
+                        family = "Gemini Pro"
+                    elif "gemini-3.1-flash" in model_id or "gemini-3-flash" in model_id:
+                        family = "Gemini Flash"
                     elif "gemini-2.5-pro" in model_id:
                         family = "Gemini 2.5 Pro"
                     elif "gemini-2.5-flash" in model_id:
@@ -453,6 +469,36 @@ class GoogleProvider(BaseProvider):
                     }
                     for family, data in groups.items()
                 ]
+            elif response.status_code == 403:
+                try:
+                    err_data = response.json()
+                    details = err_data.get("error", {}).get("details", [])
+                    for d in details:
+                        if d.get("reason") == "VALIDATION_REQUIRED":
+                            val_url = d.get("metadata", {}).get("validation_url")
+                            if val_url:
+                                return [
+                                    {
+                                        "name": "Validation Required",
+                                        "display_name": "Validation Required",
+                                        "is_error": True,
+                                        "message": "Verify your account to continue.",
+                                        "url": val_url,
+                                        "source_type": "Gemini CLI",
+                                    }
+                                ]
+                        elif d.get("reason") == "SUBSCRIPTION_REQUIRED":
+                            return [
+                                {
+                                    "name": "Subscription Required",
+                                    "display_name": "License Missing",
+                                    "is_error": True,
+                                    "message": " No Code Assist license found. Set a valid project with --project-id",
+                                    "source_type": "Gemini CLI",
+                                }
+                            ]
+                except Exception:
+                    pass
         except Exception:
             pass
         return []
@@ -471,7 +517,12 @@ class GoogleProvider(BaseProvider):
 
         def make_request(p_id):
             body = {"project": p_id} if p_id else {}
-            return requests.post(url, headers=headers, json=body, timeout=10)
+            response = requests.post(url, headers=headers, json=body, timeout=10)
+            if response.status_code != 200:
+                logger.debug(
+                    f"AG Quota Error ({p_id}) [{response.status_code}]: {response.text}"
+                )
+            return response
 
         try:
             response = make_request(project_id)
@@ -481,6 +532,7 @@ class GoogleProvider(BaseProvider):
 
             if response.status_code == 200:
                 data = response.json()
+                logger.debug(f"AG Quota Success ({project_id}): {data}")
                 models = data.get("models", {})
                 groups = {}
                 for model_id, info in models.items():
@@ -509,15 +561,19 @@ class GoogleProvider(BaseProvider):
                             if "claude" in lower_name or "claude" in lower_id:
                                 family = "Claude"
                             elif (
-                                "gemini 3 pro" in lower_name
+                                "gemini 3.1 pro" in lower_name
+                                or "gemini-3.1-pro" in lower_id
+                                or "gemini 3 pro" in lower_name
                                 or "gemini-3-pro" in lower_id
                             ):
-                                family = "Gemini 3 Pro"
+                                family = "Gemini Pro"
                             elif (
-                                "gemini 3 flash" in lower_name
+                                "gemini 3.1 flash" in lower_name
+                                or "gemini-3.1-flash" in lower_id
+                                or "gemini 3 flash" in lower_name
                                 or "gemini-3-flash" in lower_id
                             ):
-                                family = "Gemini 3 Flash"
+                                family = "Gemini Flash"
                             elif (
                                 "gemini 2.5 flash" in lower_name
                                 or "gemini-2.5-flash" in lower_id

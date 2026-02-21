@@ -40,3 +40,5 @@ antigravity-accounts.json
 
 # Test data (if any)
 # tests/data/
+
+.coverage
