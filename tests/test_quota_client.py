@@ -65,6 +65,7 @@ def test_get_available_providers():
     providers = QuotaClient.get_available_providers()
     assert "google" in providers
     assert "chutes" in providers
+    assert "github_copilot" in providers
 
 
 def test_quota_client_delegation():
@@ -79,3 +80,17 @@ def test_quota_client_delegation():
 
     client.get_color({})
     client.provider.get_color.assert_called_with({})
+
+
+@patch("gemini_quota.providers.github_copilot.requests.get")
+def test_quota_client_github_copilot(mock_get):
+    """Test QuotaClient with GitHub Copilot provider."""
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {"login": "testuser"}
+
+    client = QuotaClient(
+        {"type": "github_copilot", "githubToken": "fake-token", "email": "testuser"}
+    )
+    assert client.provider.provider_name == "GitHub Copilot"
+    quotas = client.fetch_quotas()
+    assert len(quotas) > 0

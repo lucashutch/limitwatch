@@ -31,6 +31,7 @@
 - [ ] Z.AI
 - [ ] Together AI / Fireworks
 - [ ] Opencode Zen (black subscription or credits)
+- [ ] Github Copilot
 
 ### 1. Unit Testing & Quality
 - [x] Add more unit tests for provider-specific logic (Coverage increased to 85%).

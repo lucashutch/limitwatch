@@ -28,7 +28,15 @@ class DisplayManager:
             return quotas
         return client.filter_quotas(quotas, show_all=show_all)
 
-    def draw_quota_bars(self, quotas, client, show_all=False, query=None):
+    def draw_quota_bars(
+        self,
+        quotas,
+        client,
+        show_all=False,
+        query=None,
+        compact=False,
+        account_name=None,
+    ):
         filtered_quotas = self.filter_quotas(quotas, client, show_all=show_all)
 
         if query:
@@ -61,19 +69,131 @@ class DisplayManager:
         if client:
             filtered_quotas.sort(key=lambda q: client.get_sort_key(q))
 
-        # Determine bar width based on terminal width
+        if compact:
+            self._draw_compact(filtered_quotas, client, account_name)
+        else:
+            self._draw_normal(filtered_quotas, client)
+
+    def _get_reset_string(self, reset_info, remaining_pct):
+        if reset_info != "Unknown" and remaining_pct < 100:
+
+            def format_diff(delta):
+                seconds = int(delta.total_seconds())
+                if seconds <= 0:
+                    return ""
+                days, seconds = divmod(seconds, 86400)
+                hours, seconds = divmod(seconds, 3600)
+                minutes, _ = divmod(seconds, 60)
+
+                parts = []
+                if days > 0:
+                    parts.append(f"{days}d")
+                if hours > 0:
+                    parts.append(f"{hours}h")
+                if minutes > 0 or not parts:
+                    parts.append(f"{minutes}m")
+                return f" [dim]({' '.join(parts)})[/dim]"
+
+            if isinstance(reset_info, str) and "T" in reset_info and "Z" in reset_info:
+                try:
+                    from datetime import datetime
+
+                    dt = datetime.fromisoformat(reset_info.replace("Z", "+00:00"))
+                    now = datetime.now(dt.tzinfo)
+                    return format_diff(dt - now)
+                except Exception:
+                    pass
+            elif isinstance(reset_info, (int, float)):
+                try:
+                    from datetime import datetime, timezone
+
+                    dt = datetime.fromtimestamp(
+                        reset_info / 1000 if reset_info > 1e11 else reset_info,
+                        tz=timezone.utc,
+                    )
+                    now = datetime.now(timezone.utc)
+                    return format_diff(dt - now)
+                except Exception:
+                    pass
+        return ""
+
+    def _draw_compact(self, filtered_quotas, client, account_name):
+        if not filtered_quotas:
+            return
+
+        short_indicator = client.short_indicator if client else "?"
+        provider_color = client.primary_color if client else "white"
+        prefix = f"[{provider_color}]{short_indicator}[/] {account_name}: "
+
+        reserved_width = len(prefix) + 30
+        terminal_width = self.console.width
+        bar_width = max(5, min(30, terminal_width - reserved_width))
+
+        for q in filtered_quotas:
+            name = q.get("display_name", q.get("name"))
+            # Prefer showing `used_pct` when provided by a provider (e.g. Copilot)
+            used_pct = q.get("used_pct")
+            remaining_pct = q.get("remaining_pct", 100)
+            if used_pct is not None:
+                shown_pct = float(used_pct)
+                is_used = True
+            else:
+                shown_pct = float(remaining_pct)
+                is_used = False
+
+            if q.get("is_error"):
+                message = q.get("message", "Error")
+                self.console.print(f"{prefix}[red]{name}: {message}[/red]")
+                continue
+
+            # Color logic: if showing used percentage, invert thresholds (low used = green)
+            if is_used:
+                if shown_pct <= 20:
+                    bar_color = "green"
+                elif shown_pct <= 50:
+                    bar_color = "yellow"
+                else:
+                    bar_color = "red"
+            else:
+                if shown_pct <= 20:
+                    bar_color = "red"
+                elif shown_pct <= 50:
+                    bar_color = "yellow"
+                else:
+                    bar_color = "green"
+
+            total_filled = (shown_pct / 100) * bar_width
+            filled_whole = int(total_filled)
+            bar = (
+                f"[{bar_color}]"
+                + "█" * filled_whole
+                + "[/]"
+                + " " * (bar_width - filled_whole)
+            )
+
+            reset_info = q.get("reset") or "Unknown"
+            reset_str = self._get_reset_string(reset_info, remaining_pct)
+
+            suffix = f"{shown_pct:5.1f}% used" if is_used else f"{shown_pct:5.1f}%"
+            self.console.print(f"{prefix}{name[:18]:18} {bar} {suffix}{reset_str}")
+
+    def _draw_normal(self, filtered_quotas, client):
         reserved_width = 45
         terminal_width = self.console.width
         bar_width = max(10, min(60, terminal_width - reserved_width))
 
         for q in filtered_quotas:
             name = q.get("display_name", q.get("name"))
+            used_pct = q.get("used_pct")
             remaining_pct = q.get("remaining_pct", 100)
+            if used_pct is not None:
+                shown_pct = float(used_pct)
+                is_used = True
+            else:
+                shown_pct = float(remaining_pct)
+                is_used = False
 
-            # Determine name color using provider logic via client
             name_color = client.get_color(q) if client else "white"
-
-            # Pad the name first to ensure consistent alignment, then add color tags
             padded_name = f"{name:22}"
             styled_name = f"[{name_color}]{padded_name}[/]"
 
@@ -88,16 +208,23 @@ class DisplayManager:
                     self.console.print(f"{styled_name} [red]⚠️ {message}[/red]")
                 continue
 
-            # Determine bar color based on REMAINING amount
-            if remaining_pct <= 20:
-                bar_color = "red"
-            elif remaining_pct <= 50:
-                bar_color = "yellow"
+            # Color logic: if showing used percentage, invert thresholds (low used = green)
+            if is_used:
+                if shown_pct <= 20:
+                    bar_color = "green"
+                elif shown_pct <= 50:
+                    bar_color = "yellow"
+                else:
+                    bar_color = "red"
             else:
-                bar_color = "green"
+                if shown_pct <= 20:
+                    bar_color = "red"
+                elif shown_pct <= 50:
+                    bar_color = "yellow"
+                else:
+                    bar_color = "green"
 
-            # Progress bar representation (smooth blocks)
-            total_filled = (remaining_pct / 100) * bar_width
+            total_filled = (shown_pct / 100) * bar_width
             filled_whole = int(total_filled)
             remainder = total_filled - filled_whole
 
@@ -111,58 +238,11 @@ class DisplayManager:
                 if fraction_block != " ":
                     bar += fraction_block
                 bar += "[/]"
-
-                # Pad with spaces to maintain alignment
                 used_width = filled_whole + (1 if fraction_block != " " else 0)
                 bar += " " * (bar_width - used_width)
 
             reset_info = q.get("reset") or "Unknown"
+            reset_str = self._get_reset_string(reset_info, remaining_pct)
 
-            # Clean up ISO timestamp if possible
-            reset_str = ""
-            if reset_info != "Unknown" and remaining_pct < 100:
-
-                def format_diff(delta):
-                    seconds = int(delta.total_seconds())
-                    if seconds <= 0:
-                        return ""
-                    days, seconds = divmod(seconds, 86400)
-                    hours, seconds = divmod(seconds, 3600)
-                    minutes, _ = divmod(seconds, 60)
-
-                    parts = []
-                    if days > 0:
-                        parts.append(f"{days}d")
-                    if hours > 0:
-                        parts.append(f"{hours}h")
-                    if minutes > 0 or not parts:
-                        parts.append(f"{minutes}m")
-                    return f" [dim]({' '.join(parts)})[/dim]"
-
-                if (
-                    isinstance(reset_info, str)
-                    and "T" in reset_info
-                    and "Z" in reset_info
-                ):
-                    try:
-                        from datetime import datetime
-
-                        dt = datetime.fromisoformat(reset_info.replace("Z", "+00:00"))
-                        now = datetime.now(dt.tzinfo)
-                        reset_str = format_diff(dt - now)
-                    except Exception:
-                        pass
-                elif isinstance(reset_info, (int, float)):
-                    try:
-                        from datetime import datetime, timezone
-
-                        dt = datetime.fromtimestamp(
-                            reset_info / 1000 if reset_info > 1e11 else reset_info,
-                            tz=timezone.utc,
-                        )
-                        now = datetime.now(timezone.utc)
-                        reset_str = format_diff(dt - now)
-                    except Exception:
-                        pass
-
-            self.console.print(f"{styled_name} {bar} {remaining_pct:5.1f}%{reset_str}")
+            suffix = f"{shown_pct:5.1f}% used" if is_used else f"{shown_pct:5.1f}%"
+            self.console.print(f"{styled_name} {bar} {suffix}{reset_str}")

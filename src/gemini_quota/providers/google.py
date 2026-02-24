@@ -39,6 +39,10 @@ class GoogleProvider(BaseProvider):
     def primary_color(self) -> str:
         return "cyan"
 
+    @property
+    def short_indicator(self) -> str:
+        return "G"
+
     def get_color(self, quota: Dict[str, Any]) -> str:
         source = quota.get("source_type", "")
         if source == "Gemini CLI":
