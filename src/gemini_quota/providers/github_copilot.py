@@ -226,8 +226,53 @@ class GitHubCopilotProvider(BaseProvider):
     def _fetch_personal_copilot_quota(
         self, headers: Dict[str, str]
     ) -> Optional[Dict[str, Any]]:
-        """Fetch personal Copilot quota. Uses user-level endpoint or gh CLI."""
-        # Try 1: User-level endpoint (may require additional scopes)
+        """Fetch personal Copilot quota. Uses multiple fallback paths."""
+        # Try 1: Copilot internal user endpoint (used by Copilot extensions)
+        internal_data = self._fetch_copilot_internal_user(headers)
+        if internal_data:
+            quota_snapshots = internal_data.get("quota_snapshots", {})
+            premium = quota_snapshots.get("premium_interactions", {})
+            percent_remaining = premium.get("percent_remaining")
+
+            if isinstance(percent_remaining, (int, float)):
+                remaining_pct = float(percent_remaining)
+                used_pct = max(0.0, min(100.0, 100.0 - remaining_pct))
+
+                entitlement = premium.get("entitlement")
+                remaining = premium.get("remaining")
+                overage_count = premium.get("overage_count", 0)
+                overage_permitted = premium.get("overage_permitted", False)
+                reset_iso = internal_data.get("quota_reset_date") or "Monthly"
+
+                display_name = f"Personal ({used_pct:.1f}% used)"
+                if isinstance(entitlement, (int, float)) and entitlement > 0:
+                    used_count = entitlement - (remaining or 0)
+                    display_name = f"Personal ({used_count}/{entitlement} used)"
+
+                quota = {
+                    "name": "GitHub Copilot Personal",
+                    "display_name": display_name,
+                    "remaining_pct": remaining_pct,
+                    "used_pct": used_pct,
+                    "reset": reset_iso,
+                    "source_type": "GitHub Copilot",
+                }
+
+                if isinstance(entitlement, (int, float)):
+                    quota["limit"] = entitlement
+                if isinstance(remaining, (int, float)):
+                    quota["remaining"] = remaining
+                if isinstance(entitlement, (int, float)) and isinstance(
+                    remaining, (int, float)
+                ):
+                    quota["used"] = entitlement - remaining
+                if isinstance(overage_count, (int, float)):
+                    quota["overage_used"] = overage_count
+                quota["overage_permitted"] = bool(overage_permitted)
+
+                return quota
+
+        # Try 2: User-level billing endpoint (may require additional scopes)
         try:
             resp = requests.get(
                 "https://api.github.com/user/copilot/billing",
@@ -253,6 +298,7 @@ class GitHubCopilotProvider(BaseProvider):
                     "name": "GitHub Copilot Personal",
                     "display_name": f"Personal ({active_seats}/{total_seats} active)",
                     "remaining_pct": remaining_pct,
+                    "used_pct": max(0.0, min(100.0, 100.0 - remaining_pct)),
                     "remaining": total_seats - active_seats,
                     "limit": total_seats,
                     "used": active_seats,
@@ -262,7 +308,7 @@ class GitHubCopilotProvider(BaseProvider):
         except Exception:
             pass
 
-        # Try 2: Use gh CLI if available (may have better permissions)
+        # Try 3: Use gh CLI if available (may have better permissions)
         try:
             usage_data = self._get_copilot_usage_via_gh()
             if usage_data and "usage_percentage" in usage_data:
@@ -273,6 +319,7 @@ class GitHubCopilotProvider(BaseProvider):
                     "name": "GitHub Copilot Personal",
                     "display_name": f"Personal ({usage_pct:.1f}% used)",
                     "remaining_pct": remaining_pct,
+                    "used_pct": usage_pct,
                     "reset": "Monthly",
                     "source_type": "GitHub Copilot",
                 }
@@ -320,9 +367,7 @@ class GitHubCopilotProvider(BaseProvider):
                 }
             elif resp.status_code == 404:
                 # Org not found; try member-level endpoint instead
-                member_quota = self._fetch_member_copilot_quota(
-                    headers, organization
-                )
+                member_quota = self._fetch_member_copilot_quota(headers, organization)
                 if member_quota:
                     return member_quota
                 return {
@@ -334,9 +379,7 @@ class GitHubCopilotProvider(BaseProvider):
                 }
             elif resp.status_code == 403:
                 # Permission denied on billing; try member-level endpoint
-                member_quota = self._fetch_member_copilot_quota(
-                    headers, organization
-                )
+                member_quota = self._fetch_member_copilot_quota(headers, organization)
                 if member_quota:
                     return member_quota
                 return {
@@ -365,6 +408,35 @@ class GitHubCopilotProvider(BaseProvider):
 
     def _get_copilot_usage_via_gh(self) -> Optional[Dict[str, Any]]:
         """Try to fetch Copilot usage via gh CLI (may have better permissions)."""
+        # Try 1: Copilot internal user endpoint
+        try:
+            result = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    "/copilot_internal/user",
+                    "--header",
+                    "X-GitHub-Api-Version:2025-04-01",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                import json
+
+                data = json.loads(result.stdout)
+                premium = data.get("quota_snapshots", {}).get(
+                    "premium_interactions", {}
+                )
+                percent_remaining = premium.get("percent_remaining")
+                if isinstance(percent_remaining, (int, float)):
+                    usage_pct = 100.0 - float(percent_remaining)
+                    return {"usage_percentage": usage_pct}
+        except Exception:
+            pass
+
+        # Try 2: User billing endpoint
         try:
             result = subprocess.run(
                 [
@@ -390,6 +462,31 @@ class GitHubCopilotProvider(BaseProvider):
                     if total > 0:
                         usage_pct = (active / total) * 100
                         return {"usage_percentage": usage_pct}
+        except Exception:
+            pass
+
+        return None
+
+    def _fetch_copilot_internal_user(
+        self, headers: Dict[str, str]
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch Copilot user metadata from /copilot_internal/user."""
+        if not self.github_token:
+            return None
+
+        # Copilot internal endpoints commonly expect `token` auth style.
+        internal_headers = dict(headers)
+        internal_headers["Authorization"] = f"token {self.github_token}"
+        internal_headers["X-GitHub-Api-Version"] = "2025-04-01"
+
+        try:
+            resp = requests.get(
+                "https://api.github.com/copilot_internal/user",
+                headers=internal_headers,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                return resp.json()
         except Exception:
             pass
 
