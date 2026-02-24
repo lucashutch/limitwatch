@@ -203,8 +203,10 @@ class GitHubCopilotProvider(BaseProvider):
         personal_quota = self._fetch_personal_copilot_quota(headers)
         if personal_quota:
             results.append(personal_quota)
-        else:
-            # Fallback: show as always available if we can't fetch
+        elif not self.organization:
+            # Only show the generic fallback when there is no org — for
+            # Business/Enterprise users the org quota is the real number and
+            # showing 'Personal (Available)' alongside it would be misleading.
             results.append(
                 {
                     "name": "GitHub Copilot Personal",
@@ -230,6 +232,36 @@ class GitHubCopilotProvider(BaseProvider):
         # Try 1: Copilot internal user endpoint (used by Copilot extensions)
         internal_data = self._fetch_copilot_internal_user(headers)
         if internal_data:
+            copilot_plan = str(internal_data.get("copilot_plan", "")).lower()
+            reset_iso = internal_data.get("quota_reset_date") or "Monthly"
+            if copilot_plan == "free":
+                # Free plan users don't have a personal premium allotment.
+                return {
+                    "name": "GitHub Copilot Personal",
+                    "display_name": "Personal",
+                    "remaining_pct": 100.0,
+                    "used_pct": 0.0,
+                    "reset": reset_iso,
+                    "source_type": "GitHub Copilot",
+                }
+
+            # Only individual plans should use the internal premium snapshot
+            # for PERSONAL usage. Business/enterprise and unknown plans can
+            # reflect shared org pool usage.
+            personal_plans = {"individual", "individual_pro", "pro", "pro+"}
+            if copilot_plan and copilot_plan not in personal_plans:
+                internal_data = None
+
+            if not copilot_plan and self.organization:
+                copilot_orgs = {
+                    o.lower()
+                    for o in (internal_data.get("organization_login_list") or [])
+                    if isinstance(o, str)
+                }
+                if self.organization.lower() in copilot_orgs:
+                    internal_data = None
+
+        if internal_data:
             quota_snapshots = internal_data.get("quota_snapshots", {})
             premium = quota_snapshots.get("premium_interactions", {})
             percent_remaining = premium.get("percent_remaining")
@@ -244,14 +276,9 @@ class GitHubCopilotProvider(BaseProvider):
                 overage_permitted = premium.get("overage_permitted", False)
                 reset_iso = internal_data.get("quota_reset_date") or "Monthly"
 
-                display_name = f"Personal ({used_pct:.1f}% used)"
-                if isinstance(entitlement, (int, float)) and entitlement > 0:
-                    used_count = entitlement - (remaining or 0)
-                    display_name = f"Personal ({used_count}/{entitlement} used)"
-
                 quota = {
                     "name": "GitHub Copilot Personal",
-                    "display_name": display_name,
+                    "display_name": "Personal",
                     "remaining_pct": remaining_pct,
                     "used_pct": used_pct,
                     "reset": reset_iso,
@@ -296,7 +323,7 @@ class GitHubCopilotProvider(BaseProvider):
 
                 return {
                     "name": "GitHub Copilot Personal",
-                    "display_name": f"Personal ({active_seats}/{total_seats} active)",
+                    "display_name": "Personal",
                     "remaining_pct": remaining_pct,
                     "used_pct": max(0.0, min(100.0, 100.0 - remaining_pct)),
                     "remaining": total_seats - active_seats,
@@ -317,7 +344,7 @@ class GitHubCopilotProvider(BaseProvider):
 
                 return {
                     "name": "GitHub Copilot Personal",
-                    "display_name": f"Personal ({usage_pct:.1f}% used)",
+                    "display_name": "Personal",
                     "remaining_pct": remaining_pct,
                     "used_pct": usage_pct,
                     "reset": "Monthly",
@@ -355,10 +382,16 @@ class GitHubCopilotProvider(BaseProvider):
                 next_month = (now.replace(day=1) + timedelta(days=32)).replace(day=1)
                 reset_iso = next_month.isoformat().replace("+00:00", "Z")
 
+                seat_used_pct = (
+                    max(0.0, min(100.0, (active_seats / total_seats) * 100))
+                    if total_seats > 0
+                    else 0.0
+                )
                 return {
                     "name": f"GitHub Copilot Org ({organization})",
-                    "display_name": f"{organization} ({active_seats}/{total_seats} active)",
+                    "display_name": organization,
                     "remaining_pct": remaining_pct,
+                    "used_pct": seat_used_pct,
                     "remaining": total_seats - active_seats,
                     "limit": total_seats,
                     "used": active_seats,
@@ -436,6 +469,12 @@ class GitHubCopilotProvider(BaseProvider):
                 import json
 
                 data = json.loads(result.stdout)
+                copilot_plan = str(data.get("copilot_plan", "")).lower()
+                if copilot_plan == "free":
+                    return {"usage_percentage": 0.0}
+                if copilot_plan not in {"individual", "individual_pro", "pro", "pro+"}:
+                    return None
+
                 premium = data.get("quota_snapshots", {}).get(
                     "premium_interactions", {}
                 )
@@ -531,7 +570,7 @@ class GitHubCopilotProvider(BaseProvider):
 
         return {
             "name": f"GitHub Copilot Org ({organization})",
-            "display_name": f"{organization} (Copilot org linked)",
+            "display_name": organization,
             "remaining_pct": remaining_pct,
             "used_pct": used_pct,
             "reset": internal_data.get("quota_reset_date") or "Monthly",
@@ -569,13 +608,9 @@ class GitHubCopilotProvider(BaseProvider):
             )
 
             if resp.status_code == 200:
-                seat_data = resp.json()
-                plan_type = seat_data.get("plan_type", "unknown")
-                last_activity = seat_data.get("last_activity_at", "Never")
-
                 return {
                     "name": f"GitHub Copilot Org ({organization})",
-                    "display_name": f"{organization} ({plan_type}, last active: {last_activity})",
+                    "display_name": organization,
                     "remaining_pct": 100.0,
                     "reset": "Monthly",
                     "source_type": "GitHub Copilot",

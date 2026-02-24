@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, Mock
+from unittest.mock import patch, Mock, MagicMock
 from gemini_quota.providers.github_copilot import GitHubCopilotProvider
 
 
@@ -71,7 +71,7 @@ def test_github_copilot_provider_fetch_personal_quota(mock_get):
     # Should have personal quota with usage shown
     personal_quotas = [q for q in quotas if "Personal" in q.get("display_name", "")]
     assert len(personal_quotas) > 0
-    assert "1/100 active" in personal_quotas[0]["display_name"]
+    assert personal_quotas[0]["display_name"] == "Personal"
     assert personal_quotas[0]["remaining_pct"] == 99.0
 
 
@@ -300,19 +300,20 @@ def test_github_copilot_provider_fetch_personal_via_user_endpoint(mock_get):
     quota = provider._fetch_personal_copilot_quota(headers)
 
     assert quota is not None
-    assert "1/50 active" in quota["display_name"]
+    assert quota["display_name"] == "Personal"
     assert quota["remaining_pct"] == 98.0
     assert quota["used_pct"] == 2.0
 
 
 @patch("gemini_quota.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_personal_via_copilot_internal(mock_get):
-    """Test personal quota via copilot_internal user endpoint."""
+    """Test personal quota via copilot_internal user endpoint (individual plan)."""
     headers = {"Authorization": "Bearer fake-token"}
     provider = GitHubCopilotProvider({"githubToken": "fake-token"})
 
     mock_get.return_value.status_code = 200
     mock_get.return_value.json.return_value = {
+        "copilot_plan": "individual",
         "quota_reset_date": "2026-03-01T00:00:00Z",
         "quota_snapshots": {
             "premium_interactions": {
@@ -332,6 +333,103 @@ def test_github_copilot_provider_fetch_personal_via_copilot_internal(mock_get):
     assert abs(quota["used_pct"] - 1.2) < 0.01
     assert abs(quota["remaining_pct"] - 98.8) < 0.01
     assert quota["reset"] == "2026-03-01T00:00:00Z"
+
+
+@patch("gemini_quota.providers.github_copilot.subprocess.run")
+@patch("gemini_quota.providers.github_copilot.requests.get")
+def test_github_copilot_provider_personal_not_shown_for_business_plan(
+    mock_get, mock_subprocess
+):
+    """Business/enterprise plan: internal snapshot is org-pool data, not personal."""
+    headers = {"Authorization": "Bearer fake-token"}
+    provider = GitHubCopilotProvider({"githubToken": "fake-token"})
+
+    # First call: copilot_internal/user → business plan (plan-gated, skipped)
+    internal_resp = MagicMock()
+    internal_resp.status_code = 200
+    internal_resp.json.return_value = {
+        "copilot_plan": "business",
+        "organization_login_list": ["myorg"],
+        "quota_reset_date": "2026-03-01T00:00:00Z",
+        "quota_snapshots": {
+            "premium_interactions": {
+                "entitlement": 300,
+                "remaining": 295,
+                "percent_remaining": 98.3,
+                "overage_count": 0,
+                "overage_permitted": False,
+            }
+        },
+    }
+    # Subsequent calls (Try 2 billing endpoint) → 403 so fallback also fails
+    billing_resp = MagicMock()
+    billing_resp.status_code = 403
+    mock_get.side_effect = [internal_resp, billing_resp]
+    mock_subprocess.side_effect = FileNotFoundError()
+
+    # _fetch_personal_copilot_quota must return None for business users
+    quota = provider._fetch_personal_copilot_quota(headers)
+    assert quota is None
+
+
+@patch("gemini_quota.providers.github_copilot.subprocess.run")
+@patch("gemini_quota.providers.github_copilot.requests.get")
+def test_github_copilot_provider_personal_not_shown_when_plan_unknown_org_present(
+    mock_get, mock_subprocess
+):
+    """Unknown internal plan with org membership should not be shown as personal usage."""
+    headers = {"Authorization": "Bearer fake-token"}
+    provider = GitHubCopilotProvider(
+        {"githubToken": "fake-token", "organization": "myorg"}
+    )
+
+    internal_resp = MagicMock()
+    internal_resp.status_code = 200
+    internal_resp.json.return_value = {
+        "organization_login_list": ["myorg"],
+        "quota_reset_date": "2026-03-01T00:00:00Z",
+        "quota_snapshots": {
+            "premium_interactions": {
+                "entitlement": 300,
+                "remaining": 293,
+                "percent_remaining": 97.7,
+            }
+        },
+    }
+    billing_resp = MagicMock()
+    billing_resp.status_code = 403
+    mock_get.side_effect = [internal_resp, billing_resp]
+    mock_subprocess.side_effect = FileNotFoundError()
+
+    quota = provider._fetch_personal_copilot_quota(headers)
+    assert quota is None
+
+
+@patch("gemini_quota.providers.github_copilot.requests.get")
+def test_github_copilot_provider_personal_free_plan_shows_tier_label(mock_get):
+    """Free plan: show 'Personal' label with zero usage."""
+    headers = {"Authorization": "Bearer fake-token"}
+    provider = GitHubCopilotProvider({"githubToken": "fake-token"})
+
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {
+        "copilot_plan": "free",
+        "quota_reset_date": "2026-03-01T00:00:00Z",
+        "quota_snapshots": {
+            "premium_interactions": {
+                "entitlement": 50,
+                "remaining": 40,
+                "percent_remaining": 80.0,
+            }
+        },
+    }
+
+    quota = provider._fetch_personal_copilot_quota(headers)
+
+    assert quota is not None
+    assert quota["display_name"] == "Personal"
+    assert quota["used_pct"] == 0.0
+    assert quota["remaining_pct"] == 100.0
 
 
 @patch("gemini_quota.providers.github_copilot.subprocess.run")
@@ -356,9 +454,7 @@ def test_github_copilot_provider_fetch_personal_fallback_to_none(
 def test_github_copilot_provider_get_usage_via_gh(mock_run):
     """Test fetching usage via gh CLI."""
     mock_run.return_value.returncode = 0
-    mock_run.return_value.stdout = (
-        '{"seat_breakdown": {"total": 100, "active_this_cycle": 5}}'
-    )
+    mock_run.return_value.stdout = '{"copilot_plan":"individual","quota_snapshots":{"premium_interactions":{"percent_remaining":95.0}}}'
 
     provider = GitHubCopilotProvider({})
     usage = provider._get_copilot_usage_via_gh()
@@ -405,8 +501,7 @@ def test_github_copilot_provider_fetch_member_copilot_quota(mock_get):
     quota = provider._fetch_member_copilot_quota(headers, "myorg")
 
     assert quota is not None
-    assert "business" in quota["display_name"]
-    assert "myorg" in quota["display_name"]
+    assert quota["display_name"] == "myorg"
     assert quota["remaining_pct"] == 100.0
 
 
@@ -441,7 +536,9 @@ def test_github_copilot_provider_fetch_org_success(mock_get):
 
     assert quota is not None
     assert "myorg" in quota["display_name"]
-    assert "18/25 active" in quota["display_name"]
+    # display_name now shows only the org name; seat usage is reflected via used_pct
+    assert "active" not in quota["display_name"]
+    assert abs(quota["used_pct"] - 72.0) < 0.01  # 18/25 = 72%
     assert (
         abs(quota["remaining_pct"] - 28.0) < 0.01
     )  # Account for floating point precision
@@ -503,5 +600,5 @@ def test_github_copilot_provider_fetch_org_fallback_to_internal_org(mock_get):
 
     assert quota is not None
     assert quota.get("is_error") is not True
-    assert "Copilot org linked" in quota["display_name"]
+    assert quota["display_name"] == "myorg"
     assert abs(quota["used_pct"] - 1.2) < 0.01
