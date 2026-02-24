@@ -370,6 +370,11 @@ class GitHubCopilotProvider(BaseProvider):
                 member_quota = self._fetch_member_copilot_quota(headers, organization)
                 if member_quota:
                     return member_quota
+                internal_org_quota = self._fetch_org_from_copilot_internal_user(
+                    headers, organization
+                )
+                if internal_org_quota:
+                    return internal_org_quota
                 return {
                     "name": f"GitHub Copilot Org ({organization})",
                     "display_name": f"{organization}",
@@ -382,6 +387,11 @@ class GitHubCopilotProvider(BaseProvider):
                 member_quota = self._fetch_member_copilot_quota(headers, organization)
                 if member_quota:
                     return member_quota
+                internal_org_quota = self._fetch_org_from_copilot_internal_user(
+                    headers, organization
+                )
+                if internal_org_quota:
+                    return internal_org_quota
                 return {
                     "name": f"GitHub Copilot Org ({organization})",
                     "display_name": f"{organization}",
@@ -491,6 +501,42 @@ class GitHubCopilotProvider(BaseProvider):
             pass
 
         return None
+
+    def _fetch_org_from_copilot_internal_user(
+        self, headers: Dict[str, str], organization: str
+    ) -> Optional[Dict[str, Any]]:
+        """Fallback org status from copilot_internal/user organization list."""
+        internal_data = self._fetch_copilot_internal_user(headers)
+        if not internal_data:
+            return None
+
+        copilot_orgs = [
+            o.lower()
+            for o in (internal_data.get("organization_login_list") or [])
+            if isinstance(o, str)
+        ]
+        if organization.lower() not in copilot_orgs:
+            return None
+
+        premium = internal_data.get("quota_snapshots", {}).get(
+            "premium_interactions", {}
+        )
+        percent_remaining = premium.get("percent_remaining")
+        if isinstance(percent_remaining, (int, float)):
+            remaining_pct = float(percent_remaining)
+            used_pct = max(0.0, min(100.0, 100.0 - remaining_pct))
+        else:
+            remaining_pct = 100.0
+            used_pct = 0.0
+
+        return {
+            "name": f"GitHub Copilot Org ({organization})",
+            "display_name": f"{organization} (Copilot org linked)",
+            "remaining_pct": remaining_pct,
+            "used_pct": used_pct,
+            "reset": internal_data.get("quota_reset_date") or "Monthly",
+            "source_type": "GitHub Copilot",
+        }
 
     def _fetch_member_copilot_quota(
         self, headers: Dict[str, str], organization: str
