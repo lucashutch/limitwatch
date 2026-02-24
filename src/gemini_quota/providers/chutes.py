@@ -22,6 +22,10 @@ class ChutesProvider(BaseProvider):
     def primary_color(self) -> str:
         return "yellow"
 
+    @property
+    def short_indicator(self) -> str:
+        return "C"
+
     def get_color(self, quota: Dict[str, Any]) -> str:
         return "yellow"
 
