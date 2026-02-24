@@ -55,3 +55,9 @@ class BaseProvider(ABC):
     def provider_name(self) -> str:
         """User-friendly name of the provider."""
         ...
+
+    @property
+    @abstractmethod
+    def short_indicator(self) -> str:
+        """Short 1-char indicator for compact view (e.g., 'G' for Google, 'C' for Chutes)."""
+        ...

@@ -60,6 +60,9 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
     "-s", "--show-all", is_flag=True, help="Show all models including Gemini 2.0/2.5."
 )
 @click.option(
+    "-c", "--compact", is_flag=True, help="Enable compact one-line-per-quota view."
+)
+@click.option(
     "-j", "--json", "json_output", is_flag=True, help="Output results as JSON."
 )
 @click.option("-l", "--login", is_flag=True, help="Login to a new account.")
@@ -78,6 +81,7 @@ def main(
     query,
     refresh,
     show_all,
+    compact,
     json_output,
     login,
     project_id,
@@ -120,9 +124,9 @@ def main(
                 account_data = client.provider.interactive_login(display)
                 email = auth_mgr.login(account_data)
             else:
-                # For non-interactive or JSON output, we default to Google login
-                # unless provider is specified
-                p_type = provider if provider in ["google", "chutes"] else "google"
+                # For non-interactive or JSON output, we support github_copilot explicitly
+                # otherwise default to Google login
+                p_type = provider if provider in ["google", "chutes", "github_copilot"] else "google"
                 client = QuotaClient(account_data={"type": p_type})
                 account_data = client.provider.login()
                 email = auth_mgr.login(account_data)
@@ -249,7 +253,7 @@ def main(
             return
 
         # Print main header once
-        if not json_output and not query:
+        if not json_output and not query and not compact:
             display.print_main_header()
 
         # Use indices_to_check to maintain original order
@@ -297,11 +301,22 @@ def main(
                 if error:
                     if not query:
                         provider_name = client.provider.provider_name if client else ""
-                        display.print_account_header(
-                            email, provider=provider_name, alias=alias, group=group_val
-                        )
-                        display.console.print(f"[yellow]Warning:[/yellow] {error}")
-                        display.console.print("━" * 50)
+                        if not compact:
+                            display.print_account_header(
+                                email,
+                                provider=provider_name,
+                                alias=alias,
+                                group=group_val,
+                            )
+                            display.console.print(f"[yellow]Warning:[/yellow] {error}")
+                            display.console.print("━" * 50)
+                        else:
+                            short_indicator = (
+                                client.provider.short_indicator if client else "?"
+                            )
+                            display.console.print(
+                                f"[{client.provider.primary_color}]{short_indicator}[/] {alias or email}: [yellow]Warning:[/yellow] {error}"
+                            )
                     continue
 
                 filtered_quotas = display.filter_quotas(
@@ -322,30 +337,56 @@ def main(
 
                 if not filtered_quotas and not query:
                     provider_name = client.provider.provider_name if client else ""
-                    display.print_account_header(
-                        email, provider=provider_name, alias=alias, group=group_val
+                    if not compact:
+                        display.print_account_header(
+                            email, provider=provider_name, alias=alias, group=group_val
+                        )
+                    display.draw_quota_bars(
+                        quotas,
+                        client=client,
+                        show_all=show_all,
+                        compact=compact,
+                        account_name=alias or email,
                     )
-                    display.draw_quota_bars(quotas, client=client, show_all=show_all)
-                    display.console.print("━" * 50)
+                    if not compact:
+                        display.console.print("━" * 50)
                     continue
 
                 if query:
                     if filtered_quotas:
                         provider_name = client.provider.provider_name if client else ""
+                        if not compact:
+                            display.print_account_header(
+                                email,
+                                provider=provider_name,
+                                alias=alias,
+                                group=group_val,
+                            )
+                        display.draw_quota_bars(
+                            quotas,
+                            client=client,
+                            show_all=show_all,
+                            query=query,
+                            compact=compact,
+                            account_name=alias or email,
+                        )
+                        if not compact:
+                            display.console.print("━" * 50)
+                else:
+                    provider_name = client.provider.provider_name if client else ""
+                    if not compact:
                         display.print_account_header(
                             email, provider=provider_name, alias=alias, group=group_val
                         )
-                        display.draw_quota_bars(
-                            quotas, client=client, show_all=show_all, query=query
-                        )
-                        display.console.print("━" * 50)
-                else:
-                    provider_name = client.provider.provider_name if client else ""
-                    display.print_account_header(
-                        email, provider=provider_name, alias=alias, group=group_val
+                    display.draw_quota_bars(
+                        quotas,
+                        client=client,
+                        show_all=show_all,
+                        compact=compact,
+                        account_name=alias or email,
                     )
-                    display.draw_quota_bars(quotas, client=client, show_all=show_all)
-                    display.console.print("━" * 50)
+                    if not compact:
+                        display.console.print("━" * 50)
             else:
                 filtered_quotas = display.filter_quotas(
                     quotas, client=client, show_all=show_all

@@ -1,6 +1,7 @@
 from typing import Dict, List, Any, Optional
 from .providers.google import GoogleProvider
 from .providers.chutes import ChutesProvider
+from .providers.github_copilot import GitHubCopilotProvider
 
 
 class QuotaClient:
@@ -22,6 +23,8 @@ class QuotaClient:
         account_type = self.account_data.get("type", "google")
         if account_type == "chutes":
             self.provider = ChutesProvider(self.account_data)
+        elif account_type == "github_copilot":
+            self.provider = GitHubCopilotProvider(self.account_data)
         else:
             self.provider = GoogleProvider(self.account_data, self.credentials)
 
@@ -52,4 +55,5 @@ class QuotaClient:
         return {
             "google": GoogleProvider({}, None).provider_name,
             "chutes": ChutesProvider({}).provider_name,
+            "github_copilot": GitHubCopilotProvider({}).provider_name,
         }
