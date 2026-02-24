@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch, Mock
+from unittest.mock import patch, Mock
 from gemini_quota.providers.github_copilot import GitHubCopilotProvider
 
 
@@ -302,15 +302,49 @@ def test_github_copilot_provider_fetch_personal_via_user_endpoint(mock_get):
     assert quota is not None
     assert "1/50 active" in quota["display_name"]
     assert quota["remaining_pct"] == 98.0
+    assert quota["used_pct"] == 2.0
 
 
 @patch("gemini_quota.providers.github_copilot.requests.get")
-def test_github_copilot_provider_fetch_personal_fallback_to_none(mock_get):
+def test_github_copilot_provider_fetch_personal_via_copilot_internal(mock_get):
+    """Test personal quota via copilot_internal user endpoint."""
+    headers = {"Authorization": "Bearer fake-token"}
+    provider = GitHubCopilotProvider({"githubToken": "fake-token"})
+
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {
+        "quota_reset_date": "2026-03-01T00:00:00Z",
+        "quota_snapshots": {
+            "premium_interactions": {
+                "entitlement": 100,
+                "remaining": 98.8,
+                "percent_remaining": 98.8,
+                "overage_count": 0,
+                "overage_permitted": False,
+            }
+        },
+    }
+
+    quota = provider._fetch_personal_copilot_quota(headers)
+
+    assert quota is not None
+    assert "Personal" in quota["display_name"]
+    assert abs(quota["used_pct"] - 1.2) < 0.01
+    assert abs(quota["remaining_pct"] - 98.8) < 0.01
+    assert quota["reset"] == "2026-03-01T00:00:00Z"
+
+
+@patch("gemini_quota.providers.github_copilot.subprocess.run")
+@patch("gemini_quota.providers.github_copilot.requests.get")
+def test_github_copilot_provider_fetch_personal_fallback_to_none(
+    mock_get, mock_subprocess
+):
     """Test personal quota fallback when endpoint fails."""
     headers = {"Authorization": "Bearer fake-token"}
     provider = GitHubCopilotProvider({})
 
     mock_get.return_value.status_code = 401
+    mock_subprocess.side_effect = FileNotFoundError()
 
     quota = provider._fetch_personal_copilot_quota(headers)
 

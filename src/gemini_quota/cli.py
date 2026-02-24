@@ -126,7 +126,11 @@ def main(
             else:
                 # For non-interactive or JSON output, we support github_copilot explicitly
                 # otherwise default to Google login
-                p_type = provider if provider in ["google", "chutes", "github_copilot"] else "google"
+                p_type = (
+                    provider
+                    if provider in ["google", "chutes", "github_copilot"]
+                    else "google"
+                )
                 client = QuotaClient(account_data={"type": p_type})
                 account_data = client.provider.login()
                 email = auth_mgr.login(account_data)
