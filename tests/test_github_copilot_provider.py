@@ -460,3 +460,48 @@ def test_github_copilot_provider_fetch_org_403_error(mock_get):
     assert quota is not None
     assert quota.get("is_error") is True
     assert "Insufficient permissions" in quota["message"]
+
+
+@patch("gemini_quota.providers.github_copilot.requests.get")
+def test_github_copilot_provider_fetch_org_fallback_to_internal_org(mock_get):
+    """Test org fallback to copilot_internal org list when billing/member fail."""
+    headers = {"Authorization": "Bearer fake-token"}
+    provider = GitHubCopilotProvider({"githubToken": "fake-token"})
+
+    def mock_get_side_effect(*args, **kwargs):
+        mock_resp = Mock()
+        url = args[0] if args else ""
+        if "orgs/myorg/copilot/billing" in url:
+            mock_resp.status_code = 403
+            return mock_resp
+        if "orgs/myorg/members/" in url:
+            mock_resp.status_code = 404
+            return mock_resp
+        if "copilot_internal/user" in url:
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "organization_login_list": ["myorg"],
+                "quota_reset_date": "2026-03-01T00:00:00Z",
+                "quota_snapshots": {
+                    "premium_interactions": {
+                        "percent_remaining": 98.8,
+                    }
+                },
+            }
+            return mock_resp
+        if url.endswith("/user"):
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"login": "testuser"}
+            return mock_resp
+
+        mock_resp.status_code = 404
+        return mock_resp
+
+    mock_get.side_effect = mock_get_side_effect
+
+    quota = provider._fetch_org_copilot_quota(headers, "myorg")
+
+    assert quota is not None
+    assert quota.get("is_error") is not True
+    assert "Copilot org linked" in quota["display_name"]
+    assert abs(quota["used_pct"] - 1.2) < 0.01
