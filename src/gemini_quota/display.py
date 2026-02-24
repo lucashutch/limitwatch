@@ -131,21 +131,38 @@ class DisplayManager:
 
         for q in filtered_quotas:
             name = q.get("display_name", q.get("name"))
+            # Prefer showing `used_pct` when provided by a provider (e.g. Copilot)
+            used_pct = q.get("used_pct")
             remaining_pct = q.get("remaining_pct", 100)
+            if used_pct is not None:
+                shown_pct = float(used_pct)
+                is_used = True
+            else:
+                shown_pct = float(remaining_pct)
+                is_used = False
 
             if q.get("is_error"):
                 message = q.get("message", "Error")
                 self.console.print(f"{prefix}[red]{name}: {message}[/red]")
                 continue
 
-            if remaining_pct <= 20:
-                bar_color = "red"
-            elif remaining_pct <= 50:
-                bar_color = "yellow"
+            # Color logic: if showing used percentage, invert thresholds (low used = green)
+            if is_used:
+                if shown_pct <= 20:
+                    bar_color = "green"
+                elif shown_pct <= 50:
+                    bar_color = "yellow"
+                else:
+                    bar_color = "red"
             else:
-                bar_color = "green"
+                if shown_pct <= 20:
+                    bar_color = "red"
+                elif shown_pct <= 50:
+                    bar_color = "yellow"
+                else:
+                    bar_color = "green"
 
-            total_filled = (remaining_pct / 100) * bar_width
+            total_filled = (shown_pct / 100) * bar_width
             filled_whole = int(total_filled)
             bar = (
                 f"[{bar_color}]"
@@ -157,9 +174,8 @@ class DisplayManager:
             reset_info = q.get("reset") or "Unknown"
             reset_str = self._get_reset_string(reset_info, remaining_pct)
 
-            self.console.print(
-                f"{prefix}{name[:18]:18} {bar} {remaining_pct:5.1f}%{reset_str}"
-            )
+            suffix = f"{shown_pct:5.1f}% used" if is_used else f"{shown_pct:5.1f}%"
+            self.console.print(f"{prefix}{name[:18]:18} {bar} {suffix}{reset_str}")
 
     def _draw_normal(self, filtered_quotas, client):
         reserved_width = 45
@@ -168,7 +184,14 @@ class DisplayManager:
 
         for q in filtered_quotas:
             name = q.get("display_name", q.get("name"))
+            used_pct = q.get("used_pct")
             remaining_pct = q.get("remaining_pct", 100)
+            if used_pct is not None:
+                shown_pct = float(used_pct)
+                is_used = True
+            else:
+                shown_pct = float(remaining_pct)
+                is_used = False
 
             name_color = client.get_color(q) if client else "white"
             padded_name = f"{name:22}"
@@ -185,14 +208,23 @@ class DisplayManager:
                     self.console.print(f"{styled_name} [red]⚠️ {message}[/red]")
                 continue
 
-            if remaining_pct <= 20:
-                bar_color = "red"
-            elif remaining_pct <= 50:
-                bar_color = "yellow"
+            # Color logic: if showing used percentage, invert thresholds (low used = green)
+            if is_used:
+                if shown_pct <= 20:
+                    bar_color = "green"
+                elif shown_pct <= 50:
+                    bar_color = "yellow"
+                else:
+                    bar_color = "red"
             else:
-                bar_color = "green"
+                if shown_pct <= 20:
+                    bar_color = "red"
+                elif shown_pct <= 50:
+                    bar_color = "yellow"
+                else:
+                    bar_color = "green"
 
-            total_filled = (remaining_pct / 100) * bar_width
+            total_filled = (shown_pct / 100) * bar_width
             filled_whole = int(total_filled)
             remainder = total_filled - filled_whole
 
@@ -212,4 +244,5 @@ class DisplayManager:
             reset_info = q.get("reset") or "Unknown"
             reset_str = self._get_reset_string(reset_info, remaining_pct)
 
-            self.console.print(f"{styled_name} {bar} {remaining_pct:5.1f}%{reset_str}")
+            suffix = f"{shown_pct:5.1f}% used" if is_used else f"{shown_pct:5.1f}%"
+            self.console.print(f"{styled_name} {bar} {suffix}{reset_str}")
