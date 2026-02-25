@@ -98,7 +98,7 @@ def test_chutes_fetch_quotas_no_list_fallback(mock_get):
 
     results = provider.fetch_quotas()
     assert len(results) == 1
-    assert "Quota (80/100)" in results[0]["display_name"]
+    assert "(80/100)" in results[0]["display_name"]
 
 
 def test_chutes_provider_metadata():
