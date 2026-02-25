@@ -1,8 +1,13 @@
 import subprocess
 import requests
+import concurrent.futures
+import logging
+import time
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Tuple, Optional
 from .base import BaseProvider
+
+logger = logging.getLogger(__name__)
 
 
 # --- Helper functions ---
@@ -59,6 +64,9 @@ def _build_personal_quota(remaining_pct, used_pct, reset, **extras) -> Dict[str,
 
 
 PERSONAL_PLANS = {"individual", "individual_pro", "pro", "pro+"}
+DEFAULT_API_TIMEOUT = 3
+DEFAULT_GH_CLI_TIMEOUT = 4
+ENABLE_GH_CLI_FALLBACK_DEFAULT = False
 
 
 class GitHubCopilotProvider(BaseProvider):
@@ -67,6 +75,8 @@ class GitHubCopilotProvider(BaseProvider):
         self.github_token = account_data.get("githubToken")
         self.github_login = account_data.get("email", "")
         self.organization = account_data.get("organization")
+        self._internal_user_cache: Optional[Dict[str, Any]] = None
+        self._user_login_cache: Optional[str] = None
 
     @property
     def provider_name(self) -> str:
@@ -246,20 +256,43 @@ class GitHubCopilotProvider(BaseProvider):
         if not self.github_token:
             return []
 
+        start = time.perf_counter()
+        email = self.account_data.get("email", "unknown")
+        logger.debug(
+            f"[github_copilot] fetch_quotas start account={email} org={self.organization or '-'}"
+        )
+
         results = []
         headers = _make_github_headers(self.github_token)
 
-        personal_quota = self._fetch_personal_copilot_quota(headers)
-        if personal_quota:
-            results.append(personal_quota)
-        elif not self.organization:
-            results.append(_build_personal_quota(100.0, 0.0, "Monthly"))
-
         if self.organization:
-            org_quota = self._fetch_org_copilot_quota(headers, self.organization)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                personal_future = executor.submit(
+                    self._fetch_personal_copilot_quota, headers
+                )
+                org_future = executor.submit(
+                    self._fetch_org_copilot_quota, headers, self.organization
+                )
+
+                personal_quota = personal_future.result()
+                org_quota = org_future.result()
+
+            if personal_quota:
+                results.append(personal_quota)
             if org_quota:
                 results.append(org_quota)
+        else:
+            personal_quota = self._fetch_personal_copilot_quota(headers)
+            if personal_quota:
+                results.append(personal_quota)
+            else:
+                results.append(_build_personal_quota(100.0, 0.0, "Monthly"))
 
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.debug(
+            f"[github_copilot] fetch_quotas done account={email} elapsed_ms={elapsed_ms:.1f} "
+            f"quota_count={len(results)}"
+        )
         return results
 
     # --- Personal quota fetching (3 fallback strategies) ---
@@ -268,11 +301,90 @@ class GitHubCopilotProvider(BaseProvider):
         self, headers: Dict[str, str]
     ) -> Optional[Dict[str, Any]]:
         """Fetch personal Copilot quota using multiple fallback paths."""
-        return (
-            self._try_personal_via_internal(headers)
-            or self._try_personal_via_billing(headers)
-            or self._try_personal_via_gh_cli()
+        start = time.perf_counter()
+        preferred = self.account_data.get("preferredPersonalQuotaMethod")
+
+        if preferred == "internal":
+            quota = self._try_personal_via_internal(headers)
+            if quota:
+                return quota
+        elif preferred == "billing":
+            quota = self._try_personal_via_billing(headers)
+            if quota:
+                return quota
+
+        network_methods = {
+            "internal": lambda: self._try_personal_via_internal(headers),
+            "billing": lambda: self._try_personal_via_billing(headers),
+        }
+
+        if preferred in network_methods:
+            del network_methods[preferred]
+
+        method, quota = self._first_successful_method(network_methods)
+        if quota:
+            self.account_data["preferredPersonalQuotaMethod"] = method
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.debug(
+                f"[github_copilot] personal method={method} elapsed_ms={elapsed_ms:.1f}"
+            )
+            return quota
+
+        if not self.account_data.get(
+            "enableGhCliFallback", ENABLE_GH_CLI_FALLBACK_DEFAULT
+        ):
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.debug(
+                f"[github_copilot] personal method=none elapsed_ms={elapsed_ms:.1f}"
+            )
+            return None
+
+        quota = self._try_personal_via_gh_cli()
+        if quota:
+            self.account_data["preferredPersonalQuotaMethod"] = "gh_cli"
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.debug(
+                f"[github_copilot] personal method=gh_cli elapsed_ms={elapsed_ms:.1f}"
+            )
+        else:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.debug(
+                f"[github_copilot] personal method=none elapsed_ms={elapsed_ms:.1f}"
+            )
+        return quota
+
+    @staticmethod
+    def _first_successful_method(
+        methods: Dict[str, Any],
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """Run methods in parallel and return the first successful quota result."""
+        if not methods:
+            return None, None
+
+        start = time.perf_counter()
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(methods)
+        ) as executor:
+            future_to_name = {
+                executor.submit(method): name for name, method in methods.items()
+            }
+            for future in concurrent.futures.as_completed(future_to_name):
+                name = future_to_name[future]
+                try:
+                    quota = future.result()
+                except Exception:
+                    continue
+                if quota:
+                    elapsed_ms = (time.perf_counter() - start) * 1000
+                    logger.debug(
+                        f"[github_copilot] method race winner={name} elapsed_ms={elapsed_ms:.1f}"
+                    )
+                    return name, quota
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.debug(
+            f"[github_copilot] method race no-result elapsed_ms={elapsed_ms:.1f}"
         )
+        return None, None
 
     def _try_personal_via_internal(
         self, headers: Dict[str, str]
@@ -345,7 +457,7 @@ class GitHubCopilotProvider(BaseProvider):
             resp = requests.get(
                 "https://api.github.com/user/copilot/billing",
                 headers=headers,
-                timeout=10,
+                timeout=DEFAULT_API_TIMEOUT,
             )
             if resp.status_code != 200:
                 return None
@@ -385,20 +497,37 @@ class GitHubCopilotProvider(BaseProvider):
         self, headers: Dict[str, str], organization: str
     ) -> Optional[Dict[str, Any]]:
         """Fetch organization Copilot quota with fallbacks."""
+        start = time.perf_counter()
         try:
             resp = requests.get(
                 f"https://api.github.com/orgs/{organization}/copilot/billing",
                 headers=headers,
-                timeout=10,
+                timeout=DEFAULT_API_TIMEOUT,
             )
             if resp.status_code == 200:
+                elapsed_ms = (time.perf_counter() - start) * 1000
+                logger.debug(
+                    f"[github_copilot] org primary status=200 elapsed_ms={elapsed_ms:.1f}"
+                )
                 return self._parse_org_billing(resp.json(), organization)
             if resp.status_code in (403, 404):
+                elapsed_ms = (time.perf_counter() - start) * 1000
+                logger.debug(
+                    f"[github_copilot] org primary status={resp.status_code} elapsed_ms={elapsed_ms:.1f}"
+                )
                 return self._try_org_fallbacks(headers, organization, resp.status_code)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.debug(
+                f"[github_copilot] org primary status={resp.status_code} elapsed_ms={elapsed_ms:.1f}"
+            )
             return _build_org_error(
                 organization, f"Could not fetch org quota (HTTP {resp.status_code})"
             )
         except Exception as e:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.debug(
+                f"[github_copilot] org error elapsed_ms={elapsed_ms:.1f} err={e}"
+            )
             return _build_org_error(organization, f"Error fetching org quota: {str(e)}")
 
     @staticmethod
@@ -423,15 +552,18 @@ class GitHubCopilotProvider(BaseProvider):
 
     def _try_org_fallbacks(self, headers, organization, status_code) -> Dict[str, Any]:
         """Try member and internal endpoints as fallback for org quota."""
-        member_quota = self._fetch_member_copilot_quota(headers, organization)
-        if member_quota:
-            return member_quota
-
-        internal_quota = self._fetch_org_from_copilot_internal_user(
-            headers, organization
+        _, quota = self._first_successful_method(
+            {
+                "member": lambda: self._fetch_member_copilot_quota(
+                    headers, organization
+                ),
+                "internal": lambda: self._fetch_org_from_copilot_internal_user(
+                    headers, organization
+                ),
+            }
         )
-        if internal_quota:
-            return internal_quota
+        if quota:
+            return quota
 
         if status_code == 404:
             return _build_org_error(
@@ -449,6 +581,9 @@ class GitHubCopilotProvider(BaseProvider):
         self, headers: Dict[str, str]
     ) -> Optional[Dict[str, Any]]:
         """Fetch Copilot user metadata from /copilot_internal/user."""
+        if self._internal_user_cache is not None:
+            return self._internal_user_cache
+
         if not self.github_token:
             return None
 
@@ -460,10 +595,11 @@ class GitHubCopilotProvider(BaseProvider):
             resp = requests.get(
                 "https://api.github.com/copilot_internal/user",
                 headers=internal_headers,
-                timeout=10,
+                timeout=DEFAULT_API_TIMEOUT,
             )
             if resp.status_code == 200:
-                return resp.json()
+                self._internal_user_cache = resp.json()
+                return self._internal_user_cache
         except Exception:
             pass
         return None
@@ -509,20 +645,24 @@ class GitHubCopilotProvider(BaseProvider):
     ) -> Optional[Dict[str, Any]]:
         """Fetch personal Copilot status within an organization via member endpoint."""
         try:
-            user_resp = requests.get(
-                "https://api.github.com/user", headers=headers, timeout=10
-            )
-            if user_resp.status_code != 200:
-                return None
-
-            username = user_resp.json().get("login")
+            username = self._user_login_cache
+            if not username:
+                user_resp = requests.get(
+                    "https://api.github.com/user",
+                    headers=headers,
+                    timeout=DEFAULT_API_TIMEOUT,
+                )
+                if user_resp.status_code != 200:
+                    return None
+                username = user_resp.json().get("login")
+                self._user_login_cache = username
             if not username:
                 return None
 
             resp = requests.get(
                 f"https://api.github.com/orgs/{organization}/members/{username}/copilot",
                 headers=headers,
-                timeout=10,
+                timeout=DEFAULT_API_TIMEOUT,
             )
             if resp.status_code == 200:
                 return {
@@ -553,7 +693,7 @@ class GitHubCopilotProvider(BaseProvider):
                 ],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=DEFAULT_GH_CLI_TIMEOUT,
             )
             if result.returncode != 0:
                 return None
@@ -589,7 +729,7 @@ class GitHubCopilotProvider(BaseProvider):
                 ],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=DEFAULT_GH_CLI_TIMEOUT,
             )
             if result.returncode != 0:
                 return None

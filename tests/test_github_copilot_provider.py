@@ -247,6 +247,64 @@ def test_github_copilot_provider_fetch_org_404_error(mock_get):
 
 
 @patch("gemini_quota.providers.github_copilot.requests.get")
+def test_github_copilot_provider_fetch_org_404_uses_fallback_if_available(mock_get):
+    """On 404 org billing, fallback endpoints should still be able to return org quota."""
+    account_data = {
+        "type": "github_copilot",
+        "email": "testuser",
+        "githubToken": "fake-token",
+        "organization": "myorg",
+    }
+    provider = GitHubCopilotProvider(account_data)
+
+    def mock_get_side_effect(*args, **kwargs):
+        mock_resp = Mock()
+        url = args[0] if args else ""
+
+        if "orgs/myorg/copilot/billing" in url:
+            mock_resp.status_code = 404
+            return mock_resp
+
+        if "orgs/myorg/members/testuser/copilot" in url:
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {}
+            return mock_resp
+
+        if "/user" in url:
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"login": "testuser"}
+            return mock_resp
+
+        if "copilot_internal/user" in url:
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "organization_login_list": ["myorg"],
+                "quota_reset_date": "2026-03-01T00:00:00Z",
+                "quota_snapshots": {
+                    "premium_interactions": {
+                        "percent_remaining": 88.2,
+                    }
+                },
+            }
+            return mock_resp
+
+        mock_resp.status_code = 404
+        mock_resp.json.return_value = {}
+        return mock_resp
+
+    mock_get.side_effect = mock_get_side_effect
+
+    quota = provider._fetch_org_copilot_quota(
+        headers={"Authorization": "Bearer fake-token"},
+        organization="myorg",
+    )
+
+    assert quota is not None
+    assert not quota.get("is_error", False)
+    assert quota["display_name"] == "myorg"
+
+
+@patch("gemini_quota.providers.github_copilot.requests.get")
 def test_github_copilot_provider_discover_orgs(mock_get):
     """Test organization auto-discovery."""
     mock_get.return_value.status_code = 200

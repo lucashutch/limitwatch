@@ -1,8 +1,12 @@
 import requests
 import concurrent.futures
+import logging
+from time import perf_counter
 from datetime import datetime, time, timedelta, timezone
 from typing import List, Dict, Any, Tuple, Optional
 from .base import BaseProvider
+
+logger = logging.getLogger(__name__)
 
 
 # --- Helper functions ---
@@ -54,6 +58,7 @@ def _make_chutes_headers(api_key: str) -> Dict[str, str]:
 
 class ChutesProvider(BaseProvider):
     BASE_URL = "https://api.chutes.ai"
+    FETCH_TIMEOUT = 2.5
 
     def __init__(self, account_data: Dict[str, Any]):
         super().__init__(account_data)
@@ -126,48 +131,104 @@ class ChutesProvider(BaseProvider):
 
         headers = _make_chutes_headers(self.api_key)
         next_reset = _get_next_reset_iso()
-        results = []
+        start = perf_counter()
+        email = self.account_data.get("email", "unknown")
+        logger.debug(f"[chutes] fetch_quotas start account={email}")
+        strategy = self.account_data.get("chutesQuotaStrategy", "auto")
+        logger.debug(f"[chutes] strategy={strategy}")
 
         try:
-            self._fetch_balance(headers, results)
-            self._fetch_quota_list(headers, next_reset, results)
-            self._fetch_fallback_quota(headers, next_reset, results)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                balance_future = executor.submit(self._fetch_balance, headers)
+                fallback_future = executor.submit(
+                    self._fetch_fallback_quota, headers, next_reset
+                )
+
+                balance_item = balance_future.result()
+                fallback_quota = fallback_future.result()
+
+            list_quotas: List[Dict[str, Any]] = []
+            if strategy == "full" or not fallback_quota:
+                list_quotas = self._fetch_quota_list(headers, next_reset)
+                if list_quotas:
+                    self.account_data["chutesQuotaStrategy"] = "full"
+            elif fallback_quota:
+                self.account_data["chutesQuotaStrategy"] = "fallback"
+
+            results: List[Dict[str, Any]] = []
+            if balance_item:
+                results.append(balance_item)
+            if list_quotas:
+                results.extend(list_quotas)
+            elif fallback_quota:
+                results.append(fallback_quota)
+
+            logger.debug(
+                f"[chutes] selection list={bool(list_quotas)} fallback={bool(fallback_quota)} "
+                f"balance={bool(balance_item)}"
+            )
+
+            elapsed_ms = (perf_counter() - start) * 1000
+            logger.debug(
+                f"[chutes] fetch_quotas done account={email} elapsed_ms={elapsed_ms:.1f} "
+                f"quota_count={len(results)}"
+            )
         except Exception as e:
             if "Unauthorized" in str(e):
                 raise
+            logger.debug(f"[chutes] fetch_quotas error account={email} err={e}")
+            return []
         return results
 
-    def _fetch_balance(self, headers: Dict, results: List):
-        """Fetch user balance and append to results if positive."""
-        resp = requests.get(f"{self.BASE_URL}/users/me", headers=headers, timeout=10)
+    def _fetch_balance(self, headers: Dict) -> Optional[Dict[str, Any]]:
+        """Fetch user balance and return balance quota item if positive."""
+        start = perf_counter()
+        resp = requests.get(
+            f"{self.BASE_URL}/users/me", headers=headers, timeout=self.FETCH_TIMEOUT
+        )
         if resp.status_code in (401, 403):
             raise Exception("Unauthorized: Invalid Chutes.ai API key")
         if resp.status_code == 200:
             balance = resp.json().get("balance", 0.0)
             if balance > 0:
-                results.append(
-                    {
-                        "name": "Chutes Balance",
-                        "display_name": f"Balance: ${balance:.2f}",
-                        "remaining_pct": 100.0,
-                        "reset": "N/A",
-                        "source_type": "Chutes",
-                    }
+                elapsed_ms = (perf_counter() - start) * 1000
+                logger.debug(
+                    f"[chutes] _fetch_balance success elapsed_ms={elapsed_ms:.1f}"
                 )
+                return {
+                    "name": "Chutes Balance",
+                    "display_name": f"Balance: ${balance:.2f}",
+                    "remaining_pct": 100.0,
+                    "reset": "N/A",
+                    "source_type": "Chutes",
+                }
+        elapsed_ms = (perf_counter() - start) * 1000
+        logger.debug(
+            f"[chutes] _fetch_balance status={resp.status_code} elapsed_ms={elapsed_ms:.1f}"
+        )
+        return None
 
-    def _fetch_quota_list(self, headers: Dict, next_reset: str, results: List):
-        """Fetch quota list and usage for each, appending to results."""
+    def _fetch_quota_list(self, headers: Dict, next_reset: str) -> List[Dict[str, Any]]:
+        """Fetch quota list and usage for each, returning quota items."""
+        start = perf_counter()
         resp = requests.get(
-            f"{self.BASE_URL}/users/me/quotas", headers=headers, timeout=10
+            f"{self.BASE_URL}/users/me/quotas",
+            headers=headers,
+            timeout=self.FETCH_TIMEOUT,
         )
         if resp.status_code != 200:
-            return
+            elapsed_ms = (perf_counter() - start) * 1000
+            logger.debug(
+                f"[chutes] _fetch_quota_list status={resp.status_code} elapsed_ms={elapsed_ms:.1f}"
+            )
+            return []
 
         quotas_list = resp.json()
         if not isinstance(quotas_list, list):
-            return
+            return []
 
-        usages = self._fetch_usages_parallel(quotas_list, headers)
+        usages = self._fetch_usages_parallel(quotas_list, headers, self.FETCH_TIMEOUT)
+        results = []
 
         for usage in usages:
             if not usage:
@@ -181,11 +242,19 @@ class ChutesProvider(BaseProvider):
             if quota:
                 results.append(quota)
 
+        elapsed_ms = (perf_counter() - start) * 1000
+        logger.debug(
+            f"[chutes] _fetch_quota_list done elapsed_ms={elapsed_ms:.1f} "
+            f"entries={len(quotas_list)} quotas={len(results)}"
+        )
+        return results
+
     @staticmethod
     def _fetch_usages_parallel(
-        quotas_list: List[Dict], headers: Dict
+        quotas_list: List[Dict], headers: Dict, timeout: int
     ) -> List[Optional[Dict]]:
         """Fetch usage for each quota entry in parallel."""
+        start = perf_counter()
 
         def fetch_one(q):
             cid = q.get("chute_id") or q.get("id")
@@ -193,7 +262,7 @@ class ChutesProvider(BaseProvider):
                 return None
             try:
                 url = f"https://api.chutes.ai/users/me/quota_usage/{cid}"
-                resp = requests.get(url, headers=headers, timeout=10)
+                resp = requests.get(url, headers=headers, timeout=timeout)
                 if resp.status_code == 200:
                     d = resp.json()
                     if "chute_id" not in d:
@@ -204,21 +273,34 @@ class ChutesProvider(BaseProvider):
             return None
 
         with concurrent.futures.ThreadPoolExecutor(
-            max_workers=min(len(quotas_list) or 1, 5)
+            max_workers=min(len(quotas_list) or 1, 8)
         ) as executor:
-            return list(executor.map(fetch_one, quotas_list))
+            result = list(executor.map(fetch_one, quotas_list))
 
-    def _fetch_fallback_quota(self, headers: Dict, next_reset: str, results: List):
-        """Fallback: fetch /users/me/quota_usage/me if no quotas were found."""
-        has_quotas = any("Quota" in r["name"] for r in results)
-        if has_quotas:
-            return
+        elapsed_ms = (perf_counter() - start) * 1000
+        logger.debug(
+            f"[chutes] _fetch_usages_parallel done elapsed_ms={elapsed_ms:.1f} "
+            f"requested={len(quotas_list)}"
+        )
+        return result
+
+    def _fetch_fallback_quota(
+        self, headers: Dict, next_reset: str
+    ) -> Optional[Dict[str, Any]]:
+        """Fallback: fetch /users/me/quota_usage/me and return one quota item."""
+        start = perf_counter()
 
         resp = requests.get(
-            f"{self.BASE_URL}/users/me/quota_usage/me", headers=headers, timeout=10
+            f"{self.BASE_URL}/users/me/quota_usage/me",
+            headers=headers,
+            timeout=self.FETCH_TIMEOUT,
         )
         if resp.status_code != 200:
-            return
+            elapsed_ms = (perf_counter() - start) * 1000
+            logger.debug(
+                f"[chutes] _fetch_fallback_quota status={resp.status_code} elapsed_ms={elapsed_ms:.1f}"
+            )
+            return None
 
         data = resp.json()
         quota = _build_quota_result(
@@ -227,5 +309,9 @@ class ChutesProvider(BaseProvider):
             used=data.get("used", 0),
             reset=next_reset,
         )
-        if quota:
-            results.append(quota)
+        elapsed_ms = (perf_counter() - start) * 1000
+        logger.debug(
+            f"[chutes] _fetch_fallback_quota done elapsed_ms={elapsed_ms:.1f} "
+            f"has_quota={bool(quota)}"
+        )
+        return quota
