@@ -1,5 +1,6 @@
 import subprocess
 import requests
+import concurrent.futures
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Tuple, Optional
 from .base import BaseProvider
@@ -59,6 +60,8 @@ def _build_personal_quota(remaining_pct, used_pct, reset, **extras) -> Dict[str,
 
 
 PERSONAL_PLANS = {"individual", "individual_pro", "pro", "pro+"}
+DEFAULT_API_TIMEOUT = 3
+DEFAULT_GH_CLI_TIMEOUT = 4
 
 
 class GitHubCopilotProvider(BaseProvider):
@@ -67,6 +70,8 @@ class GitHubCopilotProvider(BaseProvider):
         self.github_token = account_data.get("githubToken")
         self.github_login = account_data.get("email", "")
         self.organization = account_data.get("organization")
+        self._internal_user_cache: Optional[Dict[str, Any]] = None
+        self._user_login_cache: Optional[str] = None
 
     @property
     def provider_name(self) -> str:
@@ -249,16 +254,28 @@ class GitHubCopilotProvider(BaseProvider):
         results = []
         headers = _make_github_headers(self.github_token)
 
-        personal_quota = self._fetch_personal_copilot_quota(headers)
-        if personal_quota:
-            results.append(personal_quota)
-        elif not self.organization:
-            results.append(_build_personal_quota(100.0, 0.0, "Monthly"))
-
         if self.organization:
-            org_quota = self._fetch_org_copilot_quota(headers, self.organization)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                personal_future = executor.submit(
+                    self._fetch_personal_copilot_quota, headers
+                )
+                org_future = executor.submit(
+                    self._fetch_org_copilot_quota, headers, self.organization
+                )
+
+                personal_quota = personal_future.result()
+                org_quota = org_future.result()
+
+            if personal_quota:
+                results.append(personal_quota)
             if org_quota:
                 results.append(org_quota)
+        else:
+            personal_quota = self._fetch_personal_copilot_quota(headers)
+            if personal_quota:
+                results.append(personal_quota)
+            else:
+                results.append(_build_personal_quota(100.0, 0.0, "Monthly"))
 
         return results
 
@@ -268,11 +285,58 @@ class GitHubCopilotProvider(BaseProvider):
         self, headers: Dict[str, str]
     ) -> Optional[Dict[str, Any]]:
         """Fetch personal Copilot quota using multiple fallback paths."""
-        return (
-            self._try_personal_via_internal(headers)
-            or self._try_personal_via_billing(headers)
-            or self._try_personal_via_gh_cli()
-        )
+        preferred = self.account_data.get("preferredPersonalQuotaMethod")
+
+        if preferred == "internal":
+            quota = self._try_personal_via_internal(headers)
+            if quota:
+                return quota
+        elif preferred == "billing":
+            quota = self._try_personal_via_billing(headers)
+            if quota:
+                return quota
+
+        network_methods = {
+            "internal": lambda: self._try_personal_via_internal(headers),
+            "billing": lambda: self._try_personal_via_billing(headers),
+        }
+
+        if preferred in network_methods:
+            del network_methods[preferred]
+
+        method, quota = self._first_successful_method(network_methods)
+        if quota:
+            self.account_data["preferredPersonalQuotaMethod"] = method
+            return quota
+
+        quota = self._try_personal_via_gh_cli()
+        if quota:
+            self.account_data["preferredPersonalQuotaMethod"] = "gh_cli"
+        return quota
+
+    @staticmethod
+    def _first_successful_method(
+        methods: Dict[str, Any],
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """Run methods in parallel and return the first successful quota result."""
+        if not methods:
+            return None, None
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(methods)
+        ) as executor:
+            future_to_name = {
+                executor.submit(method): name for name, method in methods.items()
+            }
+            for future in concurrent.futures.as_completed(future_to_name):
+                name = future_to_name[future]
+                try:
+                    quota = future.result()
+                except Exception:
+                    continue
+                if quota:
+                    return name, quota
+        return None, None
 
     def _try_personal_via_internal(
         self, headers: Dict[str, str]
@@ -345,7 +409,7 @@ class GitHubCopilotProvider(BaseProvider):
             resp = requests.get(
                 "https://api.github.com/user/copilot/billing",
                 headers=headers,
-                timeout=10,
+                timeout=DEFAULT_API_TIMEOUT,
             )
             if resp.status_code != 200:
                 return None
@@ -389,7 +453,7 @@ class GitHubCopilotProvider(BaseProvider):
             resp = requests.get(
                 f"https://api.github.com/orgs/{organization}/copilot/billing",
                 headers=headers,
-                timeout=10,
+                timeout=DEFAULT_API_TIMEOUT,
             )
             if resp.status_code == 200:
                 return self._parse_org_billing(resp.json(), organization)
@@ -423,15 +487,18 @@ class GitHubCopilotProvider(BaseProvider):
 
     def _try_org_fallbacks(self, headers, organization, status_code) -> Dict[str, Any]:
         """Try member and internal endpoints as fallback for org quota."""
-        member_quota = self._fetch_member_copilot_quota(headers, organization)
-        if member_quota:
-            return member_quota
-
-        internal_quota = self._fetch_org_from_copilot_internal_user(
-            headers, organization
+        _, quota = self._first_successful_method(
+            {
+                "member": lambda: self._fetch_member_copilot_quota(
+                    headers, organization
+                ),
+                "internal": lambda: self._fetch_org_from_copilot_internal_user(
+                    headers, organization
+                ),
+            }
         )
-        if internal_quota:
-            return internal_quota
+        if quota:
+            return quota
 
         if status_code == 404:
             return _build_org_error(
@@ -449,6 +516,9 @@ class GitHubCopilotProvider(BaseProvider):
         self, headers: Dict[str, str]
     ) -> Optional[Dict[str, Any]]:
         """Fetch Copilot user metadata from /copilot_internal/user."""
+        if self._internal_user_cache is not None:
+            return self._internal_user_cache
+
         if not self.github_token:
             return None
 
@@ -460,10 +530,11 @@ class GitHubCopilotProvider(BaseProvider):
             resp = requests.get(
                 "https://api.github.com/copilot_internal/user",
                 headers=internal_headers,
-                timeout=10,
+                timeout=DEFAULT_API_TIMEOUT,
             )
             if resp.status_code == 200:
-                return resp.json()
+                self._internal_user_cache = resp.json()
+                return self._internal_user_cache
         except Exception:
             pass
         return None
@@ -509,20 +580,24 @@ class GitHubCopilotProvider(BaseProvider):
     ) -> Optional[Dict[str, Any]]:
         """Fetch personal Copilot status within an organization via member endpoint."""
         try:
-            user_resp = requests.get(
-                "https://api.github.com/user", headers=headers, timeout=10
-            )
-            if user_resp.status_code != 200:
-                return None
-
-            username = user_resp.json().get("login")
+            username = self._user_login_cache
+            if not username:
+                user_resp = requests.get(
+                    "https://api.github.com/user",
+                    headers=headers,
+                    timeout=DEFAULT_API_TIMEOUT,
+                )
+                if user_resp.status_code != 200:
+                    return None
+                username = user_resp.json().get("login")
+                self._user_login_cache = username
             if not username:
                 return None
 
             resp = requests.get(
                 f"https://api.github.com/orgs/{organization}/members/{username}/copilot",
                 headers=headers,
-                timeout=10,
+                timeout=DEFAULT_API_TIMEOUT,
             )
             if resp.status_code == 200:
                 return {
@@ -553,7 +628,7 @@ class GitHubCopilotProvider(BaseProvider):
                 ],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=DEFAULT_GH_CLI_TIMEOUT,
             )
             if result.returncode != 0:
                 return None
@@ -589,7 +664,7 @@ class GitHubCopilotProvider(BaseProvider):
                 ],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=DEFAULT_GH_CLI_TIMEOUT,
             )
             if result.returncode != 0:
                 return None
