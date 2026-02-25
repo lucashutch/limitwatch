@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import re
 
 from rich.console import Console
 
@@ -70,7 +71,16 @@ class DisplayManager:
 
         short_indicator = client.short_indicator if client else "?"
         provider_color = client.primary_color if client else "white"
-        prefix = f"[{provider_color}]{short_indicator}[/] {account_name}: "
+
+        # Compact account name: drop any leading "owner: " prefix (e.g. "lucashutch: Myriota" -> "Myriota")
+        display_account = account_name or ""
+        if isinstance(display_account, str) and ": " in display_account:
+            display_account = display_account.split(": ", 1)[1]
+
+        # Keep a fixed-width account field to align bars across rows in compact view
+        account_field = display_account[:10] if isinstance(display_account, str) else ""
+        account_field = account_field.ljust(10)
+        prefix = f"[{provider_color}]{short_indicator}[/] {account_field}: "
 
         reserved_width = len(prefix) + 30
         terminal_width = self.console.width
@@ -78,6 +88,20 @@ class DisplayManager:
 
         for q in filtered_quotas:
             name = q.get("display_name", q.get("name"))
+
+            # For compact display of Google provider models, drop a leading
+            # "Gemini " to make labels shorter (e.g. "Gemini Pro" -> "Pro").
+            try:
+                short_ind = getattr(client, "short_indicator", None) if client else None
+            except Exception:
+                short_ind = None
+            if short_ind == "G" and isinstance(name, str):
+                if name.lower().startswith("gemini "):
+                    name = name.split(" ", 1)[1]
+
+            # Remove numeric parenthetical suffixes like " (300/300)" for compact display
+            if isinstance(name, str):
+                name = re.sub(r"\s*\(\d+/\d+\)\s*$", "", name)
             shown_pct, is_used, remaining_pct = extract_percentages(q)
 
             if q.get("is_error"):
