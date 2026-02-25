@@ -21,6 +21,129 @@ SCOPES = [
     "openid",
 ]
 
+# --- Model family classification (shared between CLI and AG) ---
+
+CLI_MODEL_FAMILIES = [
+    ("gemini-3.1-pro", "Gemini Pro"),
+    ("gemini-3-pro", "Gemini Pro"),
+    ("gemini-3.1-flash", "Gemini Flash"),
+    ("gemini-3-flash", "Gemini Flash"),
+    ("gemini-2.5-pro", "Gemini 2.5 Pro"),
+    ("gemini-2.5-flash", "Gemini 2.5 Flash"),
+    ("gemini-2.0-flash", "Gemini 2.0 Flash"),
+    ("gemini-1.5-pro", "Gemini 1.5 Pro"),
+    ("gemini-1.5-flash", "Gemini 1.5 Flash"),
+]
+
+AG_MODEL_FAMILIES = [
+    ("claude", "Claude"),
+    ("gemini 3.1 pro", "Gemini Pro"),
+    ("gemini-3.1-pro", "Gemini Pro"),
+    ("gemini 3 pro", "Gemini Pro"),
+    ("gemini-3-pro", "Gemini Pro"),
+    ("gemini 3.1 flash", "Gemini Flash"),
+    ("gemini-3.1-flash", "Gemini Flash"),
+    ("gemini 3 flash", "Gemini Flash"),
+    ("gemini-3-flash", "Gemini Flash"),
+    ("gemini 2.5 flash", "Gemini 2.5 Flash"),
+    ("gemini-2.5-flash", "Gemini 2.5 Flash"),
+    ("gemini 2.5 pro", "Gemini 2.5 Pro"),
+    ("gemini-2.5-pro", "Gemini 2.5 Pro"),
+]
+
+PREMIUM_KEYWORDS = ("Gemini Pro", "Gemini Flash", "Claude")
+
+FAMILY_SORT_ORDER = {
+    "Gemini 2.0 Flash": 0,
+    "Gemini 2.5 Flash": 1,
+    "Gemini 2.5 Pro": 2,
+    "Gemini Flash": 3,
+    "Gemini Pro": 4,
+    "Claude": 5,
+}
+
+# Cached family map for display names from cachedQuota keys
+CACHED_FAMILY_MAP = {
+    "gemini-pro": "Gemini Pro (AG)",
+    "gemini-flash": "Gemini Flash (AG)",
+    "claude": "Claude (AG)",
+    "gemini-2.5-flash": "Gemini 2.5 Flash (AG)",
+    "gemini-2.5-pro": "Gemini 2.5 Pro (AG)",
+}
+
+# Endpoints for loadCodeAssist discovery
+LOAD_CODE_ASSIST_ENDPOINTS = [
+    "https://cloudcode-pa.googleapis.com",
+    "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "https://autopush-cloudcode-pa.sandbox.googleapis.com",
+]
+
+
+def classify_cli_model(model_id: str) -> Optional[str]:
+    """Classify a CLI model ID into a family name, or None."""
+    for pattern, family in CLI_MODEL_FAMILIES:
+        if pattern in model_id:
+            return family
+    return None
+
+
+def classify_ag_model(display_name: str, model_id: str) -> Optional[str]:
+    """Classify an Antigravity model into a family name, or None."""
+    lower_name = display_name.lower()
+    lower_id = model_id.lower()
+    for pattern, family in AG_MODEL_FAMILIES:
+        if pattern in lower_name or pattern in lower_id:
+            return family
+    return None
+
+
+def is_ag_model_relevant(display_name: str, model_id: str) -> bool:
+    """Check if an AG model is relevant (Gemini/Claude, not tab/chat/image)."""
+    lower_name = display_name.lower()
+    lower_id = model_id.lower()
+    important = ("gemini", "claude")
+    exclude = ("tab_", "chat_", "image", "rev19")
+    has_important = any(k in lower_name or k in lower_id for k in important)
+    has_excluded = any(k in lower_name or k in lower_id for k in exclude)
+    return has_important and not has_excluded
+
+
+def is_premium_model(name: str) -> bool:
+    """Check if a model name contains a premium keyword."""
+    return any(kw in name for kw in PREMIUM_KEYWORDS)
+
+
+def _get_user_agent() -> str:
+    """Build a user agent string for Gemini CLI requests."""
+    system = platform.system().lower()
+    os_name = (
+        "win32"
+        if system == "windows"
+        else ("darwin" if system == "darwin" else "linux")
+    )
+    arch = platform.machine().lower()
+    arch_name = "arm64" if ("arm" in arch or "aarch64" in arch) else "x64"
+    return f"GeminiCLI/1.0.0/gemini-2.5-pro ({os_name}; {arch_name})"
+
+
+def _group_by_family(entries):
+    """Group quota entries by family, keeping the lowest remaining fraction per family.
+
+    entries: list of (family, remaining_fraction, reset_time) tuples.
+    Returns: dict of {family: {"remaining_fraction": ..., "reset": ...}}
+    """
+    groups = {}
+    for family, remaining_fraction, reset_time in entries:
+        if (
+            family not in groups
+            or remaining_fraction < groups[family]["remaining_fraction"]
+        ):
+            groups[family] = {
+                "remaining_fraction": remaining_fraction,
+                "reset": reset_time or "Unknown",
+            }
+    return groups
+
 
 class GoogleProvider(BaseProvider):
     def __init__(self, account_data: Dict[str, Any], credentials=None):
@@ -45,9 +168,7 @@ class GoogleProvider(BaseProvider):
 
     def get_color(self, quota: Dict[str, Any]) -> str:
         source = quota.get("source_type", "")
-        if source == "Gemini CLI":
-            return "cyan"
-        return "magenta"
+        return "cyan" if source == "Gemini CLI" else "magenta"
 
     def filter_quotas(
         self, quotas: List[Dict[str, Any]], show_all: bool
@@ -57,25 +178,15 @@ class GoogleProvider(BaseProvider):
         if show_all:
             return quotas
 
-        # Group by source to check for premium models per source
-        has_premium_cli = any(
-            (
-                "Gemini Pro" in q.get("display_name", "")
-                or "Gemini Flash" in q.get("display_name", "")
-                or "Claude" in q.get("display_name", "")
-            )
-            and q.get("source_type") == "Gemini CLI"
-            for q in quotas
-        )
-        has_premium_ag = any(
-            (
-                "Gemini Pro" in q.get("display_name", "")
-                or "Gemini Flash" in q.get("display_name", "")
-                or "Claude" in q.get("display_name", "")
-            )
-            and q.get("source_type") == "Antigravity"
-            for q in quotas
-        )
+        has_premium = {
+            "Gemini CLI": False,
+            "Antigravity": False,
+        }
+        for q in quotas:
+            if is_premium_model(q.get("display_name", "")):
+                source = q.get("source_type", "")
+                if source in has_premium:
+                    has_premium[source] = True
 
         filtered = []
         for q in quotas:
@@ -83,14 +194,9 @@ class GoogleProvider(BaseProvider):
             source = q.get("source_type", "")
             if "2.0" in name:
                 continue
-            is_premium = (
-                "Gemini Pro" in name or "Gemini Flash" in name or "Claude" in name
-            )
-            if is_premium:
+            if is_premium_model(name):
                 filtered.append(q)
-            elif source == "Gemini CLI" and not has_premium_cli:
-                filtered.append(q)
-            elif source == "Antigravity" and not has_premium_ag:
+            elif not has_premium.get(source, False):
                 filtered.append(q)
         return filtered
 
@@ -98,19 +204,9 @@ class GoogleProvider(BaseProvider):
         source = quota.get("source_type", "")
         name = quota.get("display_name", "")
         source_prio = 0 if source == "Gemini CLI" else 1
-        family_prio = 99
-        if "Gemini 2.0 Flash" in name:
-            family_prio = 0
-        elif "Gemini 2.5 Flash" in name:
-            family_prio = 1
-        elif "Gemini 2.5 Pro" in name:
-            family_prio = 2
-        elif "Gemini Flash" in name:
-            family_prio = 3
-        elif "Gemini Pro" in name:
-            family_prio = 4
-        elif "Claude" in name:
-            family_prio = 5
+        family_prio = FAMILY_SORT_ORDER.get(
+            next((k for k in FAMILY_SORT_ORDER if k in name), ""), 99
+        )
         return source_prio, family_prio, name
 
     def interactive_login(self, display_manager: Any) -> Dict[str, Any]:
@@ -133,8 +229,6 @@ class GoogleProvider(BaseProvider):
         elif choice == 3:
             services = ["CLI"]
 
-        # manual_project_id could be passed from CLI flags if we want to support it
-        # but for simplicity in interactive mode we assume None unless we add a prompt
         return self.login(services=services)
 
     def login(self, **kwargs) -> Dict[str, Any]:
@@ -142,174 +236,9 @@ class GoogleProvider(BaseProvider):
         services = kwargs.get("services", ["AG", "CLI"])
         manual_project_id = kwargs.get("manual_project_id")
 
-        client_config = {
-            "installed": {
-                "client_id": ANTIGRAVITY_CLIENT_ID,
-                "client_secret": ANTIGRAVITY_CLIENT_SECRET,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-            }
-        }
-
-        flow = InstalledAppFlow.from_client_config(client_config, scopes=SCOPES)
-        creds = flow.run_local_server(port=0, open_browser=False)
-
-        # Fetch email
-        session = google.auth.transport.requests.AuthorizedSession(creds)
-        userinfo = session.get("https://www.googleapis.com/oauth2/v3/userinfo").json()
-        email = userinfo.get("email")
-
-        if not email:
-            raise Exception("Failed to retrieve email from Google")
-
-        # Try to fetch managed project ID and metadata
-        project_ids = {}
-        if manual_project_id:
-            project_ids["projectId"] = manual_project_id
-            project_ids["managedProjectId"] = manual_project_id
-        else:
-            # 1. Try loadCodeAssist
-            logger.info("Searching for associated Google Cloud project...")
-            endpoints = [
-                "https://cloudcode-pa.googleapis.com",
-                "https://daily-cloudcode-pa.sandbox.googleapis.com",
-                "https://autopush-cloudcode-pa.sandbox.googleapis.com",
-            ]
-
-            headers = {
-                "User-Agent": "google-api-nodejs-client/9.15.1",
-                "Content-Type": "application/json",
-                "Client-Metadata": '{"ideType":"ANTIGRAVITY","platform":"LINUX","pluginType":"GEMINI"}',
-            }
-
-            metadata = {
-                "ideType": "ANTIGRAVITY",
-                "platform": "LINUX",
-                "pluginType": "GEMINI",
-            }
-
-            for url_base in endpoints:
-                try:
-                    resp = session.post(
-                        f"{url_base}/v1internal:loadCodeAssist",
-                        headers=headers,
-                        json={"metadata": metadata},
-                        timeout=10,
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        project_data = data.get("cloudaicompanionProject")
-                        p_id = None
-                        if isinstance(project_data, str):
-                            p_id = project_data
-                        elif isinstance(project_data, dict):
-                            p_id = project_data.get("id")
-
-                        if p_id:
-                            project_ids["projectId"] = p_id
-                            project_ids["managedProjectId"] = p_id
-                            break
-                except Exception:
-                    pass
-
-            # 2. Try getManagedProject
-            if "projectId" not in project_ids:
-                try:
-                    headers = {
-                        "User-Agent": "antigravity/1.15.8 linux/x64",
-                        "X-Goog-Api-Client": "google-cloud-sdk vscode/1.96.0",
-                        "Client-Metadata": '{"ideType":"VSCODE","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}',
-                    }
-                    for ide in ["VSCODE", "JETBRAINS", "IDE_UNSPECIFIED"]:
-                        resp = session.post(
-                            "https://cloudcode-pa.googleapis.com/v1internal:getManagedProject",
-                            headers=headers,
-                            json={"ideType": ide},
-                            timeout=5,
-                        )
-                        if resp.status_code == 200:
-                            managed_id = resp.json().get("projectId")
-                            if managed_id:
-                                project_ids["managedProjectId"] = managed_id
-                                project_ids["projectId"] = managed_id
-                                break
-                except Exception:
-                    pass
-
-            # 3. Try Cloud Resource Manager
-            if "projectId" not in project_ids:
-                try:
-                    all_projects = []
-                    next_page_token = None
-                    for page in range(1, 4):
-                        url = "https://cloudresourcemanager.googleapis.com/v1/projects"
-                        if next_page_token:
-                            url += f"?pageToken={next_page_token}"
-                        resp = session.get(url, timeout=10)
-                        if resp.status_code != 200:
-                            break
-                        data = resp.json()
-                        projects = data.get("projects", [])
-                        all_projects.extend(projects)
-                        next_page_token = data.get("nextPageToken")
-                        if not next_page_token or not projects:
-                            break
-
-                    if all_projects:
-                        # Priority 1: gen-lang-client
-                        gen_lang_projects = [
-                            p
-                            for p in all_projects
-                            if "gen-lang-client" in p.get("projectId", "")
-                            and p.get("lifecycleState") == "ACTIVE"
-                        ]
-                        if gen_lang_projects:
-                            gen_lang_projects.sort(
-                                key=lambda x: x.get("createTime", ""), reverse=True
-                            )
-                            p_id = gen_lang_projects[0]["projectId"]
-                            project_ids["projectId"] = p_id
-                            project_ids["managedProjectId"] = p_id
-                        # Priority 2: 'gemini' or 'cloud-code'
-                        if "projectId" not in project_ids:
-                            ai_projects = [
-                                p
-                                for p in all_projects
-                                if (
-                                    "gemini" in p.get("projectId", "").lower()
-                                    or "cloud-code" in p.get("projectId", "").lower()
-                                )
-                                and p.get("lifecycleState") == "ACTIVE"
-                            ]
-                            if ai_projects:
-                                ai_projects.sort(
-                                    key=lambda x: x.get("createTime", ""), reverse=True
-                                )
-                                p_id = ai_projects[0]["projectId"]
-                                project_ids["projectId"] = p_id
-                                project_ids["managedProjectId"] = p_id
-                        # Priority 3: Fallback newest active
-                        if "projectId" not in project_ids:
-                            active_projects = [
-                                p
-                                for p in all_projects
-                                if p.get("lifecycleState") == "ACTIVE"
-                            ]
-                            if active_projects:
-                                active_projects.sort(
-                                    key=lambda x: x.get("createTime", ""), reverse=True
-                                )
-                                p_id = active_projects[0]["projectId"]
-                                project_ids["projectId"] = p_id
-                                project_ids["managedProjectId"] = p_id
-                except Exception:
-                    pass
-
-            # 4. Final Fallback
-            if "projectId" not in project_ids:
-                default_id = "rising-fact-p41fc"
-                project_ids["projectId"] = default_id
-                project_ids["managedProjectId"] = default_id
+        creds, session = self._run_oauth_flow()
+        email = self._fetch_email(session)
+        project_ids = self._discover_project_ids(session, manual_project_id)
 
         account_data = {
             "type": "google",
@@ -324,10 +253,182 @@ class GoogleProvider(BaseProvider):
             print(f"Final Project ID: {final_id}")
         else:
             print(
-                "Warning: No Google Cloud project could be automatically associated. CLI quotas might be limited."
+                "Warning: No Google Cloud project could be automatically associated. "
+                "CLI quotas might be limited."
             )
 
         return account_data
+
+    def _run_oauth_flow(self):
+        """Run the OAuth installed app flow and return (credentials, session)."""
+        client_config = {
+            "installed": {
+                "client_id": ANTIGRAVITY_CLIENT_ID,
+                "client_secret": ANTIGRAVITY_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        }
+        flow = InstalledAppFlow.from_client_config(client_config, scopes=SCOPES)
+        creds = flow.run_local_server(port=0, open_browser=False)
+        session = google.auth.transport.requests.AuthorizedSession(creds)
+        return creds, session
+
+    def _fetch_email(self, session) -> str:
+        """Fetch the authenticated user's email from Google."""
+        userinfo = session.get("https://www.googleapis.com/oauth2/v3/userinfo").json()
+        email = userinfo.get("email")
+        if not email:
+            raise Exception("Failed to retrieve email from Google")
+        return email
+
+    def _discover_project_ids(
+        self, session, manual_project_id: Optional[str] = None
+    ) -> Dict[str, str]:
+        """Discover the Google Cloud project ID, using multiple fallback strategies."""
+        if manual_project_id:
+            return {
+                "projectId": manual_project_id,
+                "managedProjectId": manual_project_id,
+            }
+
+        logger.info("Searching for associated Google Cloud project...")
+
+        project_ids = (
+            self._try_load_code_assist(session)
+            or self._try_get_managed_project(session)
+            or self._try_cloud_resource_manager(session)
+            or {
+                "projectId": "rising-fact-p41fc",
+                "managedProjectId": "rising-fact-p41fc",
+            }
+        )
+        return project_ids
+
+    def _try_load_code_assist(self, session) -> Optional[Dict[str, str]]:
+        """Try loadCodeAssist endpoints to discover project ID."""
+        headers = {
+            "User-Agent": "google-api-nodejs-client/9.15.1",
+            "Content-Type": "application/json",
+            "Client-Metadata": '{"ideType":"ANTIGRAVITY","platform":"LINUX","pluginType":"GEMINI"}',
+        }
+        metadata = {
+            "ideType": "ANTIGRAVITY",
+            "platform": "LINUX",
+            "pluginType": "GEMINI",
+        }
+
+        for url_base in LOAD_CODE_ASSIST_ENDPOINTS:
+            try:
+                resp = session.post(
+                    f"{url_base}/v1internal:loadCodeAssist",
+                    headers=headers,
+                    json={"metadata": metadata},
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    p_id = self._extract_project_id(resp.json())
+                    if p_id:
+                        return {"projectId": p_id, "managedProjectId": p_id}
+            except Exception:
+                pass
+        return None
+
+    @staticmethod
+    def _extract_project_id(data: dict) -> Optional[str]:
+        """Extract project ID from a loadCodeAssist response."""
+        project_data = data.get("cloudaicompanionProject")
+        if isinstance(project_data, str):
+            return project_data
+        if isinstance(project_data, dict):
+            return project_data.get("id")
+        return None
+
+    def _try_get_managed_project(self, session) -> Optional[Dict[str, str]]:
+        """Try getManagedProject endpoint to discover project ID."""
+        headers = {
+            "User-Agent": "antigravity/1.15.8 linux/x64",
+            "X-Goog-Api-Client": "google-cloud-sdk vscode/1.96.0",
+            "Client-Metadata": '{"ideType":"VSCODE","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}',
+        }
+        try:
+            for ide in ["VSCODE", "JETBRAINS", "IDE_UNSPECIFIED"]:
+                resp = session.post(
+                    "https://cloudcode-pa.googleapis.com/v1internal:getManagedProject",
+                    headers=headers,
+                    json={"ideType": ide},
+                    timeout=5,
+                )
+                if resp.status_code == 200:
+                    managed_id = resp.json().get("projectId")
+                    if managed_id:
+                        return {"projectId": managed_id, "managedProjectId": managed_id}
+        except Exception:
+            pass
+        return None
+
+    def _try_cloud_resource_manager(self, session) -> Optional[Dict[str, str]]:
+        """Try Cloud Resource Manager to discover project ID via project listing."""
+        try:
+            projects = self._list_crm_projects(session)
+            if not projects:
+                return None
+            return self._pick_best_project(projects)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _list_crm_projects(session, max_pages=3) -> List[Dict]:
+        """List projects from Cloud Resource Manager, paginating up to max_pages."""
+        all_projects = []
+        next_page_token = None
+
+        for _ in range(max_pages):
+            url = "https://cloudresourcemanager.googleapis.com/v1/projects"
+            if next_page_token:
+                url += f"?pageToken={next_page_token}"
+            resp = session.get(url, timeout=10)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            projects = data.get("projects", [])
+            all_projects.extend(projects)
+            next_page_token = data.get("nextPageToken")
+            if not next_page_token or not projects:
+                break
+        return all_projects
+
+    @staticmethod
+    def _pick_best_project(projects: List[Dict]) -> Optional[Dict[str, str]]:
+        """Pick the best project from a list using priority rules."""
+        active = [p for p in projects if p.get("lifecycleState") == "ACTIVE"]
+
+        # Priority 1: gen-lang-client
+        gen_lang = [p for p in active if "gen-lang-client" in p.get("projectId", "")]
+        if gen_lang:
+            gen_lang.sort(key=lambda x: x.get("createTime", ""), reverse=True)
+            pid = gen_lang[0]["projectId"]
+            return {"projectId": pid, "managedProjectId": pid}
+
+        # Priority 2: gemini or cloud-code
+        ai_projects = [
+            p
+            for p in active
+            if "gemini" in p.get("projectId", "").lower()
+            or "cloud-code" in p.get("projectId", "").lower()
+        ]
+        if ai_projects:
+            ai_projects.sort(key=lambda x: x.get("createTime", ""), reverse=True)
+            pid = ai_projects[0]["projectId"]
+            return {"projectId": pid, "managedProjectId": pid}
+
+        # Priority 3: newest active
+        if active:
+            active.sort(key=lambda x: x.get("createTime", ""), reverse=True)
+            pid = active[0]["projectId"]
+            return {"projectId": pid, "managedProjectId": pid}
+
+        return None
 
     def fetch_quotas(self) -> List[Dict[str, Any]]:
         services = self.account_data.get("services", ["AG", "CLI"])
@@ -338,171 +439,151 @@ class GoogleProvider(BaseProvider):
         if not services:
             return []
 
-        quotas = []
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=len(services)
-        ) as executor:
-            futures = {}
-            if "CLI" in services:
-                futures["CLI"] = executor.submit(
-                    self._fetch_gemini_cli_quotas, project_id
-                )
-            if "AG" in services:
-                futures["AG"] = executor.submit(
-                    self._fetch_antigravity_quotas, project_id
-                )
-
-            for service, future in futures.items():
-                try:
-                    res = future.result()
-                    quotas.extend(res)
-                except Exception:
-                    pass
+        quotas = self._fetch_services_parallel(services, project_id)
 
         if not quotas:
-            # Fallback to cachedQuota if API call failed or returned empty
-            cached = self.account_data.get("cachedQuota", {})
-            if cached:
-                # Mapping from cached keys to display names
-                family_map = {
-                    "gemini-pro": "Gemini Pro (AG)",
-                    "gemini-flash": "Gemini Flash (AG)",
-                    "claude": "Claude (AG)",
-                    "gemini-2.5-flash": "Gemini 2.5 Flash (AG)",
-                    "gemini-2.5-pro": "Gemini 2.5 Pro (AG)",
+            quotas = self._load_cached_quotas()
+
+        return quotas
+
+    def _fetch_services_parallel(self, services, project_id) -> List[Dict[str, Any]]:
+        """Fetch CLI and AG quotas in parallel."""
+        quotas = []
+        fetchers = {}
+        if "CLI" in services:
+            fetchers["CLI"] = lambda: self._fetch_gemini_cli_quotas(project_id)
+        if "AG" in services:
+            fetchers["AG"] = lambda: self._fetch_antigravity_quotas(project_id)
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(fetchers) or 1
+        ) as executor:
+            futures = {name: executor.submit(fn) for name, fn in fetchers.items()}
+            for name, future in futures.items():
+                try:
+                    quotas.extend(future.result())
+                except Exception:
+                    pass
+        return quotas
+
+    def _load_cached_quotas(self) -> List[Dict[str, Any]]:
+        """Load quotas from cachedQuota in account_data as fallback."""
+        cached = self.account_data.get("cachedQuota", {})
+        if not cached:
+            return []
+
+        quotas = []
+        for family, q_data in cached.items():
+            display_name = CACHED_FAMILY_MAP.get(
+                family, f"{family.replace('-', ' ').title()} (AG)"
+            )
+            quotas.append(
+                {
+                    "name": family,
+                    "display_name": display_name,
+                    "remaining_pct": q_data.get("remainingFraction", 1.0) * 100,
+                    "reset": q_data.get("resetTime", "Unknown"),
+                    "source_type": "Antigravity",
                 }
-                for family, q_data in cached.items():
-                    display_name = family_map.get(
-                        family, f"{family.replace('-', ' ').title()} (AG)"
-                    )
-                    quotas.append(
-                        {
-                            "name": family,
-                            "display_name": display_name,
-                            "remaining_pct": q_data.get("remainingFraction", 1.0) * 100,
-                            "reset": q_data.get("resetTime", "Unknown"),
-                            "source_type": "Antigravity",
-                        }
-                    )
+            )
         return quotas
 
     def _fetch_gemini_cli_quotas(
         self, project_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         url = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota"
-
-        system = platform.system().lower()
-        os_name = (
-            "win32"
-            if system == "windows"
-            else ("darwin" if system == "darwin" else "linux")
-        )
-        arch = platform.machine().lower()
-        arch_name = "arm64" if ("arm" in arch or "aarch64" in arch) else "x64"
-        user_agent = f"GeminiCLI/1.0.0/gemini-2.5-pro ({os_name}; {arch_name})"
-
         headers = {
             "Authorization": f"Bearer {self.credentials.token}",
             "Content-Type": "application/json",
-            "User-Agent": user_agent,
+            "User-Agent": _get_user_agent(),
         }
 
-        def make_request(p_id):
-            body = {"project": p_id} if p_id else {}
-            response = requests.post(url, headers=headers, json=body, timeout=10)
-            if response.status_code != 200:
-                logger.debug(
-                    f"CLI Quota Error ({p_id}) [{response.status_code}]: {response.text}"
-                )
-            return response
-
         try:
-            response = make_request(project_id)
-            # If failed with project_id, try without it
-            if response.status_code != 200 and project_id:
-                response = make_request(None)
-
+            response = self._make_quota_request(url, headers, project_id)
             if response.status_code == 200:
-                data = response.json()
-                logger.debug(f"CLI Quota Success ({project_id}): {data}")
-                buckets = data.get("buckets", [])
-                groups = {}
-                for bucket in buckets:
-                    model_id = bucket.get("modelId")
-                    if not model_id:
-                        continue
+                return self._parse_cli_quota_response(response.json())
+            if response.status_code == 403:
+                return self._parse_cli_403_error(response)
+        except Exception:
+            pass
+        return []
 
-                    family = None
-                    if "gemini-3.1-pro" in model_id or "gemini-3-pro" in model_id:
-                        family = "Gemini Pro"
-                    elif "gemini-3.1-flash" in model_id or "gemini-3-flash" in model_id:
-                        family = "Gemini Flash"
-                    elif "gemini-2.5-pro" in model_id:
-                        family = "Gemini 2.5 Pro"
-                    elif "gemini-2.5-flash" in model_id:
-                        family = "Gemini 2.5 Flash"
-                    elif "gemini-2.0-flash" in model_id:
-                        family = "Gemini 2.0 Flash"
-                    elif "gemini-1.5-pro" in model_id:
-                        family = "Gemini 1.5 Pro"
-                    elif "gemini-1.5-flash" in model_id:
-                        family = "Gemini 1.5 Flash"
+    def _make_quota_request(self, url, headers, project_id):
+        """Make a quota request, falling back to no project_id on failure."""
+        body = {"project": project_id} if project_id else {}
+        response = requests.post(url, headers=headers, json=body, timeout=10)
+        if response.status_code != 200:
+            logger.debug(
+                f"Quota Error ({project_id}) [{response.status_code}]: {response.text}"
+            )
+        if response.status_code != 200 and project_id:
+            response = requests.post(url, headers=headers, json={}, timeout=10)
+        return response
 
-                    if not family:
-                        continue
+    @staticmethod
+    def _parse_cli_quota_response(data: dict) -> List[Dict[str, Any]]:
+        """Parse a successful CLI quota response into quota dicts."""
+        logger.debug(f"CLI Quota Success: {data}")
+        buckets = data.get("buckets", [])
 
-                    remaining_fraction = bucket.get("remainingFraction", 1.0)
-                    reset_time = bucket.get("resetTime")
+        entries = []
+        for bucket in buckets:
+            model_id = bucket.get("modelId")
+            if not model_id:
+                continue
+            family = classify_cli_model(model_id)
+            if not family:
+                continue
+            entries.append(
+                (
+                    family,
+                    bucket.get("remainingFraction", 1.0),
+                    bucket.get("resetTime"),
+                )
+            )
 
-                    if (
-                        family not in groups
-                        or remaining_fraction < groups[family]["remaining_fraction"]
-                    ):
-                        groups[family] = {
-                            "remaining_fraction": remaining_fraction,
-                            "reset": reset_time or "Unknown",
+        groups = _group_by_family(entries)
+        return [
+            {
+                "name": f"{family} (CLI)",
+                "display_name": f"{family} (CLI)",
+                "remaining_pct": info["remaining_fraction"] * 100,
+                "reset": info["reset"],
+                "source_type": "Gemini CLI",
+            }
+            for family, info in groups.items()
+        ]
+
+    @staticmethod
+    def _parse_cli_403_error(response) -> List[Dict[str, Any]]:
+        """Parse a 403 error from the CLI quota endpoint."""
+        try:
+            err_data = response.json()
+            details = err_data.get("error", {}).get("details", [])
+            for d in details:
+                if d.get("reason") == "VALIDATION_REQUIRED":
+                    val_url = d.get("metadata", {}).get("validation_url")
+                    if val_url:
+                        return [
+                            {
+                                "name": "Validation Required",
+                                "display_name": "Validation Required",
+                                "is_error": True,
+                                "message": "Verify your account to continue.",
+                                "url": val_url,
+                                "source_type": "Gemini CLI",
+                            }
+                        ]
+                elif d.get("reason") == "SUBSCRIPTION_REQUIRED":
+                    return [
+                        {
+                            "name": "Subscription Required",
+                            "display_name": "License Missing",
+                            "is_error": True,
+                            "message": " No Code Assist license found. Set a valid project with --project-id",
+                            "source_type": "Gemini CLI",
                         }
-
-                return [
-                    {
-                        "name": f"{family} (CLI)",
-                        "display_name": f"{family} (CLI)",
-                        "remaining_pct": data["remaining_fraction"] * 100,
-                        "reset": data["reset"],
-                        "source_type": "Gemini CLI",
-                    }
-                    for family, data in groups.items()
-                ]
-            elif response.status_code == 403:
-                try:
-                    err_data = response.json()
-                    details = err_data.get("error", {}).get("details", [])
-                    for d in details:
-                        if d.get("reason") == "VALIDATION_REQUIRED":
-                            val_url = d.get("metadata", {}).get("validation_url")
-                            if val_url:
-                                return [
-                                    {
-                                        "name": "Validation Required",
-                                        "display_name": "Validation Required",
-                                        "is_error": True,
-                                        "message": "Verify your account to continue.",
-                                        "url": val_url,
-                                        "source_type": "Gemini CLI",
-                                    }
-                                ]
-                        elif d.get("reason") == "SUBSCRIPTION_REQUIRED":
-                            return [
-                                {
-                                    "name": "Subscription Required",
-                                    "display_name": "License Missing",
-                                    "is_error": True,
-                                    "message": " No Code Assist license found. Set a valid project with --project-id",
-                                    "source_type": "Gemini CLI",
-                                }
-                            ]
-                except Exception:
-                    pass
+                    ]
         except Exception:
             pass
         return []
@@ -519,98 +600,47 @@ class GoogleProvider(BaseProvider):
             "Client-Metadata": '{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}',
         }
 
-        def make_request(p_id):
-            body = {"project": p_id} if p_id else {}
-            response = requests.post(url, headers=headers, json=body, timeout=10)
-            if response.status_code != 200:
-                logger.debug(
-                    f"AG Quota Error ({p_id}) [{response.status_code}]: {response.text}"
-                )
-            return response
-
         try:
-            response = make_request(project_id)
-            # If failed with project_id, try without it
-            if response.status_code != 200 and project_id:
-                response = make_request(None)
-
+            response = self._make_quota_request(url, headers, project_id)
             if response.status_code == 200:
-                data = response.json()
-                logger.debug(f"AG Quota Success ({project_id}): {data}")
-                models = data.get("models", {})
-                groups = {}
-                for model_id, info in models.items():
-                    display_name = info.get("displayName", model_id)
-                    lower_name, lower_id = display_name.lower(), model_id.lower()
-
-                    important_keywords = ["gemini", "claude"]
-                    exclude_keywords = ["tab_", "chat_", "image", "rev19"]
-
-                    if (
-                        (
-                            any(k in lower_name for k in important_keywords)
-                            or any(k in lower_id for k in important_keywords)
-                        )
-                        and not any(k in lower_name for k in exclude_keywords)
-                        and not any(k in lower_id for k in exclude_keywords)
-                    ):
-                        quota_info = info.get("quotaInfo")
-                        if quota_info:
-                            remaining_fraction = quota_info.get(
-                                "remainingFraction", 1.0
-                            )
-                            reset_time = quota_info.get("resetTime")
-
-                            family = "Other"
-                            if "claude" in lower_name or "claude" in lower_id:
-                                family = "Claude"
-                            elif (
-                                "gemini 3.1 pro" in lower_name
-                                or "gemini-3.1-pro" in lower_id
-                                or "gemini 3 pro" in lower_name
-                                or "gemini-3-pro" in lower_id
-                            ):
-                                family = "Gemini Pro"
-                            elif (
-                                "gemini 3.1 flash" in lower_name
-                                or "gemini-3.1-flash" in lower_id
-                                or "gemini 3 flash" in lower_name
-                                or "gemini-3-flash" in lower_id
-                            ):
-                                family = "Gemini Flash"
-                            elif (
-                                "gemini 2.5 flash" in lower_name
-                                or "gemini-2.5-flash" in lower_id
-                            ):
-                                family = "Gemini 2.5 Flash"
-                            elif (
-                                "gemini 2.5 pro" in lower_name
-                                or "gemini-2.5-pro" in lower_id
-                            ):
-                                family = "Gemini 2.5 Pro"
-                            else:
-                                family = display_name
-
-                            if (
-                                family not in groups
-                                or remaining_fraction
-                                < groups[family]["remaining_fraction"]
-                            ):
-                                groups[family] = {
-                                    "remaining_fraction": remaining_fraction,
-                                    "reset": reset_time or "Unknown",
-                                }
-
-                return [
-                    {
-                        "name": f"{family} (AG)",
-                        "display_name": f"{family} (AG)",
-                        "remaining_pct": data["remaining_fraction"] * 100,
-                        "reset": data["reset"],
-                        "source_type": "Antigravity",
-                    }
-                    for family, data in groups.items()
-                ]
+                return self._parse_ag_quota_response(response.json())
         except Exception:
             pass
         return []
+
+    @staticmethod
+    def _parse_ag_quota_response(data: dict) -> List[Dict[str, Any]]:
+        """Parse a successful Antigravity quota response into quota dicts."""
+        logger.debug(f"AG Quota Success: {data}")
+        models = data.get("models", {})
+
+        entries = []
+        for model_id, info in models.items():
+            display_name = info.get("displayName", model_id)
+            if not is_ag_model_relevant(display_name, model_id):
+                continue
+
+            quota_info = info.get("quotaInfo")
+            if not quota_info:
+                continue
+
+            family = classify_ag_model(display_name, model_id) or display_name
+            entries.append(
+                (
+                    family,
+                    quota_info.get("remainingFraction", 1.0),
+                    quota_info.get("resetTime"),
+                )
+            )
+
+        groups = _group_by_family(entries)
+        return [
+            {
+                "name": f"{family} (AG)",
+                "display_name": f"{family} (AG)",
+                "remaining_pct": info["remaining_fraction"] * 100,
+                "reset": info["reset"],
+                "source_type": "Antigravity",
+            }
+            for family, info in groups.items()
+        ]
