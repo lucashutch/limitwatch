@@ -71,6 +71,8 @@ def test_get_available_providers():
 def test_quota_client_delegation():
     client = QuotaClient({"type": "google"})
     client.provider = MagicMock()
+    client.provider.short_indicator = "X"
+    client.provider.primary_color = "blue"
 
     client.filter_quotas([], True)
     client.provider.filter_quotas.assert_called_with([], True)
@@ -80,6 +82,9 @@ def test_quota_client_delegation():
 
     client.get_color({})
     client.provider.get_color.assert_called_with({})
+
+    assert client.short_indicator == "X"
+    assert client.primary_color == "blue"
 
 
 @patch("gemini_quota.providers.github_copilot.requests.get")
