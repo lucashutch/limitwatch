@@ -2,12 +2,15 @@ import json
 import sys
 import click
 import logging
+import time
 import concurrent.futures
 from importlib.metadata import version, PackageNotFoundError
 from .config import Config
 from .auth import AuthManager
 from .quota_client import QuotaClient
 from .display import DisplayManager
+
+logger = logging.getLogger(__name__)
 
 try:
     __version__ = version("gemini-quota")
@@ -22,6 +25,10 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
     """Fetch quota data for a single account. Returns (email, quotas, client, error)."""
     email = acc_data.get("email", f"Account {idx}")
     account_type = acc_data.get("type", "google")
+    start = time.perf_counter()
+    logger.debug(
+        f"[cli] fetch_account_data start account={email} provider={account_type}"
+    )
 
     creds = None
     if account_type == "google":
@@ -36,8 +43,18 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
     try:
         client = QuotaClient(acc_data, credentials=creds)
         quotas = client.fetch_quotas()
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.debug(
+            f"[cli] fetch_account_data done account={email} provider={account_type} "
+            f"elapsed_ms={elapsed_ms:.1f} quota_count={len(quotas or [])}"
+        )
         return email, quotas, client, None
     except Exception as e:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.debug(
+            f"[cli] fetch_account_data error account={email} provider={account_type} "
+            f"elapsed_ms={elapsed_ms:.1f} err={e}"
+        )
         return email, None, None, str(e)
 
 

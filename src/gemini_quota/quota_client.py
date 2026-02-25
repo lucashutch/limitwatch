@@ -49,6 +49,16 @@ class QuotaClient:
         """Get color for a quota item using the provider's logic."""
         return self.provider.get_color(quota)
 
+    @property
+    def short_indicator(self) -> str:
+        """Expose provider short indicator for display rendering."""
+        return self.provider.short_indicator
+
+    @property
+    def primary_color(self) -> str:
+        """Expose provider primary color for display rendering."""
+        return self.provider.primary_color
+
     @staticmethod
     def get_available_providers() -> Dict[str, str]:
         """Return a mapping of provider type to user-friendly name."""

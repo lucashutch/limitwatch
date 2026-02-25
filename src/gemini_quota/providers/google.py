@@ -2,6 +2,7 @@ import requests
 import platform
 import logging
 import concurrent.futures
+import time
 from typing import List, Dict, Any, Optional, Tuple
 import google.auth.transport.requests
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -436,6 +437,10 @@ class GoogleProvider(BaseProvider):
         return None
 
     def fetch_quotas(self) -> List[Dict[str, Any]]:
+        start = time.perf_counter()
+        email = self.account_data.get("email", "unknown")
+        logger.debug(f"[google] fetch_quotas start account={email}")
+
         services = self.account_data.get("services", ["AG", "CLI"])
         project_id = self.account_data.get("projectId") or self.account_data.get(
             "managedProjectId"
@@ -449,6 +454,11 @@ class GoogleProvider(BaseProvider):
         if not quotas:
             quotas = self._load_cached_quotas()
 
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.debug(
+            f"[google] fetch_quotas done account={email} elapsed_ms={elapsed_ms:.1f} "
+            f"quota_count={len(quotas)}"
+        )
         return quotas
 
     def _fetch_services_parallel(self, services, project_id) -> List[Dict[str, Any]]:
@@ -460,15 +470,32 @@ class GoogleProvider(BaseProvider):
         if "AG" in services:
             fetchers["AG"] = lambda: self._fetch_antigravity_quotas(project_id)
 
+        start = time.perf_counter()
+        logger.debug(
+            f"[google] _fetch_services_parallel start services={list(fetchers.keys())}"
+        )
+
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=len(fetchers) or 1
         ) as executor:
             futures = {name: executor.submit(fn) for name, fn in fetchers.items()}
             for name, future in futures.items():
                 try:
-                    quotas.extend(future.result())
-                except Exception:
-                    pass
+                    service_start = time.perf_counter()
+                    service_quotas = future.result()
+                    quotas.extend(service_quotas)
+                    service_elapsed_ms = (time.perf_counter() - service_start) * 1000
+                    logger.debug(
+                        f"[google] service={name} quota_count={len(service_quotas)} "
+                        f"join_elapsed_ms={service_elapsed_ms:.1f}"
+                    )
+                except Exception as e:
+                    logger.debug(f"[google] service={name} failed err={e}")
+
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.debug(
+            f"[google] _fetch_services_parallel done elapsed_ms={elapsed_ms:.1f} total={len(quotas)}"
+        )
         return quotas
 
     def _load_cached_quotas(self) -> List[Dict[str, Any]]:
@@ -515,6 +542,8 @@ class GoogleProvider(BaseProvider):
 
     def _make_quota_request(self, url, headers, project_id):
         """Make a quota request, falling back to no project_id on failure."""
+        start = time.perf_counter()
+        endpoint = url.rsplit(":", 1)[-1]
         if project_id and not self._prefer_no_project:
             response = requests.post(
                 url,
@@ -524,6 +553,10 @@ class GoogleProvider(BaseProvider):
             )
             if response.status_code == 200:
                 self._prefer_no_project = False
+                elapsed_ms = (time.perf_counter() - start) * 1000
+                logger.debug(
+                    f"[google] endpoint={endpoint} mode=project status=200 elapsed_ms={elapsed_ms:.1f}"
+                )
                 return response
 
             logger.debug(
@@ -540,6 +573,10 @@ class GoogleProvider(BaseProvider):
         )
         if response.status_code == 200:
             self._prefer_no_project = True
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.debug(
+            f"[google] endpoint={endpoint} mode=noproject status={response.status_code} elapsed_ms={elapsed_ms:.1f}"
+        )
         return response
 
     @staticmethod
