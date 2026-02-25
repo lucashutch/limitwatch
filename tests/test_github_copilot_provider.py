@@ -1,6 +1,13 @@
 import pytest
 from unittest.mock import patch, Mock, MagicMock
-from gemini_quota.providers.github_copilot import GitHubCopilotProvider
+from gemini_quota.providers.github_copilot import (
+    GitHubCopilotProvider,
+    _make_github_headers,
+    _next_month_reset_iso,
+    _seat_percentages,
+    _build_org_error,
+    _build_personal_quota,
+)
 
 
 @patch("gemini_quota.providers.github_copilot.requests.get")
@@ -602,3 +609,427 @@ def test_github_copilot_provider_fetch_org_fallback_to_internal_org(mock_get):
     assert quota.get("is_error") is not True
     assert quota["display_name"] == "myorg"
     assert abs(quota["used_pct"] - 1.2) < 0.01
+
+
+# --- Module-level helper function tests ---
+
+
+class TestMakeGithubHeaders:
+    def test_headers_structure(self):
+        headers = _make_github_headers("my-token")
+        assert headers["Authorization"] == "Bearer my-token"
+        assert "X-GitHub-Api-Version" in headers
+        assert "Accept" in headers
+
+
+class TestNextMonthResetIso:
+    def test_returns_iso_string(self):
+        result = _next_month_reset_iso()
+        assert "T" in result
+        assert result.endswith("Z")
+
+
+class TestSeatPercentages:
+    def test_normal(self):
+        remaining, used = _seat_percentages(100, 30)
+        assert remaining == 70.0
+        assert used == 30.0
+
+    def test_zero_total(self):
+        remaining, used = _seat_percentages(0, 0)
+        assert remaining == 100.0
+        assert used == 0.0
+
+    def test_all_active(self):
+        remaining, used = _seat_percentages(10, 10)
+        assert remaining == 0.0
+        assert used == 100.0
+
+
+class TestBuildOrgError:
+    def test_structure(self):
+        err = _build_org_error("myorg", "Access denied")
+        assert err["is_error"] is True
+        assert "myorg" in err["display_name"]
+        assert err["message"] == "Access denied"
+        assert err["source_type"] == "GitHub Copilot"
+
+
+class TestBuildPersonalQuota:
+    def test_basic(self):
+        q = _build_personal_quota(80.0, 20.0, "Monthly")
+        assert q["display_name"] == "Personal"
+        assert q["remaining_pct"] == 80.0
+        assert q["used_pct"] == 20.0
+
+    def test_with_extras(self):
+        q = _build_personal_quota(50.0, 50.0, "Monthly", limit=100, remaining=50)
+        assert q["limit"] == 100
+        assert q["remaining"] == 50
+
+
+# --- Interactive login tests ---
+
+
+class TestInteractiveLogin:
+    @patch("click.prompt")
+    @patch("gemini_quota.providers.github_copilot.requests.get")
+    def test_interactive_login_with_gh_token(self, mock_get, mock_prompt):
+        """Test interactive login when gh CLI token is found."""
+        provider = GitHubCopilotProvider({})
+        dm = MagicMock()
+
+        # Mock _get_gh_token to return a token
+        with patch.object(provider, "_get_gh_token", return_value="gh-token"):
+            # No orgs discovered
+            with patch.object(provider, "_discover_organizations", return_value=[]):
+                mock_prompt.return_value = ""  # No manual org entry
+
+                # Mock validate_token
+                mock_get.return_value.status_code = 200
+                mock_get.return_value.json.return_value = {"login": "testuser"}
+
+                result = provider.interactive_login(dm)
+                assert result["email"] == "testuser"
+                assert result["githubToken"] == "gh-token"
+
+    @patch("click.prompt")
+    @patch("gemini_quota.providers.github_copilot.requests.get")
+    def test_interactive_login_no_gh_token_manual(self, mock_get, mock_prompt):
+        """Test interactive login when user enters token manually."""
+        provider = GitHubCopilotProvider({})
+        dm = MagicMock()
+
+        with patch.object(provider, "_get_gh_token", return_value=None):
+            with patch.object(provider, "_discover_organizations", return_value=[]):
+                mock_prompt.side_effect = ["manual-token", ""]  # token, then no org
+                mock_get.return_value.status_code = 200
+                mock_get.return_value.json.return_value = {"login": "testuser"}
+
+                result = provider.interactive_login(dm)
+                assert result["githubToken"] == "manual-token"
+
+    @patch("click.prompt")
+    @patch("gemini_quota.providers.github_copilot.requests.get")
+    def test_interactive_login_with_orgs(self, mock_get, mock_prompt):
+        """Test interactive login with org selection."""
+        provider = GitHubCopilotProvider({})
+        dm = MagicMock()
+
+        with patch.object(provider, "_get_gh_token", return_value="gh-token"):
+            with patch.object(
+                provider, "_discover_organizations", return_value=["org-a", "org-b"]
+            ):
+                mock_prompt.return_value = 1  # Select first org
+                mock_get.return_value.status_code = 200
+                mock_get.return_value.json.return_value = {"login": "testuser"}
+
+                result = provider.interactive_login(dm)
+                assert result["organization"] == "org-a"
+
+    @patch("click.prompt")
+    @patch("gemini_quota.providers.github_copilot.requests.get")
+    def test_interactive_login_skip_org(self, mock_get, mock_prompt):
+        """Test interactive login skipping org."""
+        provider = GitHubCopilotProvider({})
+        dm = MagicMock()
+
+        with patch.object(provider, "_get_gh_token", return_value="gh-token"):
+            with patch.object(
+                provider, "_discover_organizations", return_value=["org-a"]
+            ):
+                mock_prompt.return_value = 0  # Skip org
+                mock_get.return_value.status_code = 200
+                mock_get.return_value.json.return_value = {"login": "testuser"}
+
+                result = provider.interactive_login(dm)
+                assert "organization" not in result
+
+
+class TestPromptForToken:
+    @patch("click.prompt")
+    def test_no_gh_token_empty_input_raises(self, mock_prompt):
+        """No gh CLI token and user enters empty string."""
+        provider = GitHubCopilotProvider({})
+        dm = MagicMock()
+
+        with patch.object(provider, "_get_gh_token", return_value=None):
+            mock_prompt.return_value = ""
+            with pytest.raises(Exception, match="GitHub token is required"):
+                provider._prompt_for_token(dm)
+
+
+class TestTryDiscoverOrgs:
+    def test_success(self):
+        provider = GitHubCopilotProvider({})
+        dm = MagicMock()
+
+        with patch.object(
+            provider, "_discover_organizations", return_value=["org1", "org2"]
+        ):
+            orgs = provider._try_discover_orgs(dm, "token")
+            assert orgs == ["org1", "org2"]
+
+    def test_exception(self):
+        provider = GitHubCopilotProvider({})
+        dm = MagicMock()
+
+        with patch.object(
+            provider, "_discover_organizations", side_effect=Exception("fail")
+        ):
+            orgs = provider._try_discover_orgs(dm, "token")
+            assert orgs == []
+
+
+class TestSelectOrgFromList:
+    @patch("click.prompt")
+    def test_select_valid(self, mock_prompt):
+        dm = MagicMock()
+        mock_prompt.return_value = 2
+        result = GitHubCopilotProvider._select_org_from_list(
+            dm, ["org-a", "org-b", "org-c"]
+        )
+        assert result == "org-b"
+
+    @patch("click.prompt")
+    def test_select_skip(self, mock_prompt):
+        dm = MagicMock()
+        mock_prompt.return_value = 0
+        result = GitHubCopilotProvider._select_org_from_list(dm, ["org-a"])
+        assert result is None
+
+
+# --- Additional edge case tests ---
+
+
+class TestValidateToken:
+    @patch("gemini_quota.providers.github_copilot.requests.get")
+    def test_validate_token_exception(self, mock_get):
+        mock_get.side_effect = Exception("Network error")
+        with pytest.raises(Exception, match="GitHub authentication failed"):
+            GitHubCopilotProvider._validate_token("some-token")
+
+
+class TestFetchQuotasEdgeCases:
+    def test_no_token(self):
+        provider = GitHubCopilotProvider({})
+        assert provider.fetch_quotas() == []
+
+    @patch("gemini_quota.providers.github_copilot.requests.get")
+    def test_no_personal_no_org_fallback(self, mock_get):
+        """No personal quota found, no org → use default personal."""
+        provider = GitHubCopilotProvider({"githubToken": "tok"})
+        mock_get.return_value.status_code = 401
+        with patch.object(provider, "_fetch_personal_copilot_quota", return_value=None):
+            quotas = provider.fetch_quotas()
+            assert len(quotas) == 1
+            assert quotas[0]["display_name"] == "Personal"
+            assert quotas[0]["remaining_pct"] == 100.0
+
+
+class TestTryPersonalViaBilling:
+    @patch("gemini_quota.providers.github_copilot.requests.get")
+    def test_success(self, mock_get):
+        provider = GitHubCopilotProvider({})
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "seat_breakdown": {"total": 100, "active_this_cycle": 25}
+        }
+        headers = _make_github_headers("token")
+        result = provider._try_personal_via_billing(headers)
+        assert result is not None
+        assert result["remaining_pct"] == 75.0
+        assert result["used_pct"] == 25.0
+
+    @patch("gemini_quota.providers.github_copilot.requests.get")
+    def test_exception(self, mock_get):
+        provider = GitHubCopilotProvider({})
+        mock_get.side_effect = Exception("timeout")
+        headers = _make_github_headers("token")
+        result = provider._try_personal_via_billing(headers)
+        assert result is None
+
+
+class TestTryPersonalViaGhCli:
+    @patch.object(GitHubCopilotProvider, "_get_copilot_usage_via_gh")
+    def test_success(self, mock_usage):
+        provider = GitHubCopilotProvider({})
+        mock_usage.return_value = {"usage_percentage": 25.0}
+        result = provider._try_personal_via_gh_cli()
+        assert result is not None
+        assert result["remaining_pct"] == 75.0
+        assert result["used_pct"] == 25.0
+
+    @patch.object(GitHubCopilotProvider, "_get_copilot_usage_via_gh")
+    def test_no_data(self, mock_usage):
+        provider = GitHubCopilotProvider({})
+        mock_usage.return_value = None
+        result = provider._try_personal_via_gh_cli()
+        assert result is None
+
+    @patch.object(GitHubCopilotProvider, "_get_copilot_usage_via_gh")
+    def test_exception(self, mock_usage):
+        provider = GitHubCopilotProvider({})
+        mock_usage.side_effect = Exception("fail")
+        result = provider._try_personal_via_gh_cli()
+        assert result is None
+
+
+class TestFetchOrgCopilotQuota:
+    @patch("gemini_quota.providers.github_copilot.requests.get")
+    def test_other_error_code(self, mock_get):
+        """Test non-200/403/404 HTTP response."""
+        provider = GitHubCopilotProvider({"githubToken": "tok"})
+        mock_get.return_value.status_code = 500
+        headers = _make_github_headers("tok")
+        result = provider._fetch_org_copilot_quota(headers, "myorg")
+        assert result["is_error"] is True
+        assert "HTTP 500" in result["message"]
+
+    @patch("gemini_quota.providers.github_copilot.requests.get")
+    def test_exception(self, mock_get):
+        """Test exception during org fetch."""
+        provider = GitHubCopilotProvider({"githubToken": "tok"})
+        mock_get.side_effect = Exception("Connection reset")
+        headers = _make_github_headers("tok")
+        result = provider._fetch_org_copilot_quota(headers, "myorg")
+        assert result["is_error"] is True
+        assert "Connection reset" in result["message"]
+
+
+class TestFetchCopilotInternalUser:
+    @patch("gemini_quota.providers.github_copilot.requests.get")
+    def test_no_token(self, mock_get):
+        provider = GitHubCopilotProvider({})
+        headers = _make_github_headers("tok")
+        result = provider._fetch_copilot_internal_user(headers)
+        assert result is None
+
+
+class TestFetchOrgFromInternalUser:
+    @patch("gemini_quota.providers.github_copilot.requests.get")
+    def test_org_not_in_list(self, mock_get):
+        provider = GitHubCopilotProvider({"githubToken": "tok"})
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "organization_login_list": ["other-org"],
+            "quota_snapshots": {},
+        }
+        headers = _make_github_headers("tok")
+        result = provider._fetch_org_from_copilot_internal_user(headers, "myorg")
+        assert result is None
+
+    @patch("gemini_quota.providers.github_copilot.requests.get")
+    def test_no_percent_remaining(self, mock_get):
+        """Org in list but no percent_remaining → defaults."""
+        provider = GitHubCopilotProvider({"githubToken": "tok"})
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "organization_login_list": ["myorg"],
+            "quota_snapshots": {},
+        }
+        headers = _make_github_headers("tok")
+        result = provider._fetch_org_from_copilot_internal_user(headers, "myorg")
+        assert result is not None
+        assert result["remaining_pct"] == 100.0
+        assert result["used_pct"] == 0.0
+
+
+class TestTryGhInternalUsage:
+    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    def test_free_plan(self, mock_run):
+        provider = GitHubCopilotProvider({})
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = '{"copilot_plan":"free"}'
+        result = provider._try_gh_internal_usage()
+        assert result == {"usage_percentage": 0.0}
+
+    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    def test_non_personal_plan(self, mock_run):
+        provider = GitHubCopilotProvider({})
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = '{"copilot_plan":"business"}'
+        result = provider._try_gh_internal_usage()
+        assert result is None
+
+    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    def test_no_percent_remaining(self, mock_run):
+        provider = GitHubCopilotProvider({})
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = '{"copilot_plan":"individual","quota_snapshots":{"premium_interactions":{}}}'
+        result = provider._try_gh_internal_usage()
+        assert result is None
+
+    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    def test_returncode_nonzero(self, mock_run):
+        provider = GitHubCopilotProvider({})
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stdout = ""
+        result = provider._try_gh_internal_usage()
+        assert result is None
+
+    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    def test_exception(self, mock_run):
+        provider = GitHubCopilotProvider({})
+        mock_run.side_effect = FileNotFoundError()
+        result = provider._try_gh_internal_usage()
+        assert result is None
+
+
+class TestTryGhBillingUsage:
+    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    def test_success(self, mock_run):
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = (
+            '{"seat_breakdown":{"total":10,"active_this_cycle":3}}'
+        )
+        result = GitHubCopilotProvider._try_gh_billing_usage()
+        assert result is not None
+        assert result["usage_percentage"] == 30.0
+
+    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    def test_returncode_nonzero(self, mock_run):
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stdout = ""
+        result = GitHubCopilotProvider._try_gh_billing_usage()
+        assert result is None
+
+    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    def test_exception(self, mock_run):
+        mock_run.side_effect = FileNotFoundError()
+        result = GitHubCopilotProvider._try_gh_billing_usage()
+        assert result is None
+
+
+class TestExtractPremiumQuota:
+    def test_no_percent_remaining(self):
+        provider = GitHubCopilotProvider({})
+        result = provider._extract_premium_quota(
+            {"quota_snapshots": {"premium_interactions": {}}}
+        )
+        assert result is None
+
+    def test_with_overage(self):
+        provider = GitHubCopilotProvider({})
+        result = provider._extract_premium_quota(
+            {
+                "quota_reset_date": "2026-03-01T00:00:00Z",
+                "quota_snapshots": {
+                    "premium_interactions": {
+                        "percent_remaining": 60.0,
+                        "entitlement": 100,
+                        "remaining": 60,
+                        "overage_count": 5,
+                        "overage_permitted": True,
+                    }
+                },
+            }
+        )
+        assert result is not None
+        assert result["remaining_pct"] == 60.0
+        assert result["used_pct"] == 40.0
+        assert result["limit"] == 100
+        assert result["remaining"] == 60
+        assert result["used"] == 40
+        assert result["overage_used"] == 5
+        assert result["overage_permitted"] is True

@@ -131,3 +131,126 @@ def test_auth_manager_login_missing_data(tmp_path):
     auth_mgr = AuthManager(auth_file)
     with pytest.raises(Exception, match="Account data missing"):
         auth_mgr.login({})
+
+
+def test_auth_manager_refresh_credentials_success(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+
+    mock_creds = MagicMock()
+    mock_creds.refresh.return_value = None  # refresh doesn't raise
+
+    result = auth_mgr.refresh_credentials(mock_creds)
+    assert result is True
+    mock_creds.refresh.assert_called_once()
+
+
+def test_auth_manager_refresh_credentials_failure(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+
+    mock_creds = MagicMock()
+    mock_creds.refresh.side_effect = Exception("Token expired")
+
+    result = auth_mgr.refresh_credentials(mock_creds)
+    assert result is False
+
+
+def test_auth_manager_login_update_existing(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+
+    # First login
+    auth_mgr.login(
+        {"email": "test@example.com", "type": "google", "refreshToken": "old"}
+    )
+    assert len(auth_mgr.accounts) == 1
+
+    # Same email+type → update, not add
+    auth_mgr.login(
+        {"email": "test@example.com", "type": "google", "refreshToken": "new"}
+    )
+    assert len(auth_mgr.accounts) == 1
+    assert auth_mgr.accounts[0]["refreshToken"] == "new"
+
+
+def test_auth_manager_update_metadata(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+    auth_mgr.accounts = [{"email": "test@example.com", "type": "google"}]
+
+    # Set alias and group
+    result = auth_mgr.update_account_metadata(
+        "test@example.com", {"alias": "my-alias", "group": "work"}
+    )
+    assert result is True
+    assert auth_mgr.accounts[0]["alias"] == "my-alias"
+    assert auth_mgr.accounts[0]["group"] == "work"
+
+
+def test_auth_manager_update_metadata_clear(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+    auth_mgr.accounts = [
+        {"email": "test@example.com", "type": "google", "alias": "old-alias"}
+    ]
+
+    # Clear alias with None
+    result = auth_mgr.update_account_metadata("test@example.com", {"alias": None})
+    assert result is True
+    assert "alias" not in auth_mgr.accounts[0]
+
+
+def test_auth_manager_update_metadata_clear_with_empty(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+    auth_mgr.accounts = [
+        {"email": "test@example.com", "type": "google", "alias": "old"}
+    ]
+
+    # Clear with empty string
+    result = auth_mgr.update_account_metadata("test@example.com", {"alias": ""})
+    assert result is True
+    assert "alias" not in auth_mgr.accounts[0]
+
+
+def test_auth_manager_update_metadata_clear_with_none_string(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+    auth_mgr.accounts = [
+        {"email": "test@example.com", "type": "google", "alias": "old"}
+    ]
+
+    # Clear with "none" string
+    result = auth_mgr.update_account_metadata("test@example.com", {"alias": "none"})
+    assert result is True
+    assert "alias" not in auth_mgr.accounts[0]
+
+
+def test_auth_manager_update_metadata_not_found(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+    auth_mgr.accounts = [{"email": "test@example.com", "type": "google"}]
+
+    result = auth_mgr.update_account_metadata("other@example.com", {"alias": "x"})
+    assert result is False
+
+
+def test_auth_manager_update_metadata_clear_nonexistent_key(tmp_path):
+    """Clearing a key that doesn't exist should not raise."""
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+    auth_mgr.accounts = [{"email": "test@example.com", "type": "google"}]
+
+    result = auth_mgr.update_account_metadata("test@example.com", {"alias": None})
+    assert result is True
+    assert "alias" not in auth_mgr.accounts[0]
+
+
+def test_auth_manager_logout_by_alias(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+    auth_mgr.accounts = [{"email": "test@example.com", "alias": "my-alias"}]
+
+    assert auth_mgr.logout("my-alias") is True
+    assert len(auth_mgr.accounts) == 0
