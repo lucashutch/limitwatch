@@ -54,6 +54,7 @@ def _make_chutes_headers(api_key: str) -> Dict[str, str]:
 
 class ChutesProvider(BaseProvider):
     BASE_URL = "https://api.chutes.ai"
+    FETCH_TIMEOUT = 3
 
     def __init__(self, account_data: Dict[str, Any]):
         super().__init__(account_data)
@@ -129,8 +130,15 @@ class ChutesProvider(BaseProvider):
         results = []
 
         try:
-            self._fetch_balance(headers, results)
-            self._fetch_quota_list(headers, next_reset, results)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [
+                    executor.submit(self._fetch_balance, headers, results),
+                    executor.submit(
+                        self._fetch_quota_list, headers, next_reset, results
+                    ),
+                ]
+                for future in concurrent.futures.as_completed(futures):
+                    future.result()
             self._fetch_fallback_quota(headers, next_reset, results)
         except Exception as e:
             if "Unauthorized" in str(e):
@@ -139,7 +147,9 @@ class ChutesProvider(BaseProvider):
 
     def _fetch_balance(self, headers: Dict, results: List):
         """Fetch user balance and append to results if positive."""
-        resp = requests.get(f"{self.BASE_URL}/users/me", headers=headers, timeout=10)
+        resp = requests.get(
+            f"{self.BASE_URL}/users/me", headers=headers, timeout=self.FETCH_TIMEOUT
+        )
         if resp.status_code in (401, 403):
             raise Exception("Unauthorized: Invalid Chutes.ai API key")
         if resp.status_code == 200:
@@ -158,7 +168,9 @@ class ChutesProvider(BaseProvider):
     def _fetch_quota_list(self, headers: Dict, next_reset: str, results: List):
         """Fetch quota list and usage for each, appending to results."""
         resp = requests.get(
-            f"{self.BASE_URL}/users/me/quotas", headers=headers, timeout=10
+            f"{self.BASE_URL}/users/me/quotas",
+            headers=headers,
+            timeout=self.FETCH_TIMEOUT,
         )
         if resp.status_code != 200:
             return
@@ -167,7 +179,7 @@ class ChutesProvider(BaseProvider):
         if not isinstance(quotas_list, list):
             return
 
-        usages = self._fetch_usages_parallel(quotas_list, headers)
+        usages = self._fetch_usages_parallel(quotas_list, headers, self.FETCH_TIMEOUT)
 
         for usage in usages:
             if not usage:
@@ -183,7 +195,7 @@ class ChutesProvider(BaseProvider):
 
     @staticmethod
     def _fetch_usages_parallel(
-        quotas_list: List[Dict], headers: Dict
+        quotas_list: List[Dict], headers: Dict, timeout: int
     ) -> List[Optional[Dict]]:
         """Fetch usage for each quota entry in parallel."""
 
@@ -193,7 +205,7 @@ class ChutesProvider(BaseProvider):
                 return None
             try:
                 url = f"https://api.chutes.ai/users/me/quota_usage/{cid}"
-                resp = requests.get(url, headers=headers, timeout=10)
+                resp = requests.get(url, headers=headers, timeout=timeout)
                 if resp.status_code == 200:
                     d = resp.json()
                     if "chute_id" not in d:
@@ -215,7 +227,9 @@ class ChutesProvider(BaseProvider):
             return
 
         resp = requests.get(
-            f"{self.BASE_URL}/users/me/quota_usage/me", headers=headers, timeout=10
+            f"{self.BASE_URL}/users/me/quota_usage/me",
+            headers=headers,
+            timeout=self.FETCH_TIMEOUT,
         )
         if resp.status_code != 200:
             return

@@ -78,6 +78,8 @@ LOAD_CODE_ASSIST_ENDPOINTS = [
     "https://autopush-cloudcode-pa.sandbox.googleapis.com",
 ]
 
+DEFAULT_QUOTA_TIMEOUT = 3
+
 
 def classify_cli_model(model_id: str) -> Optional[str]:
     """Classify a CLI model ID into a family name, or None."""
@@ -149,6 +151,9 @@ class GoogleProvider(BaseProvider):
     def __init__(self, account_data: Dict[str, Any], credentials=None):
         super().__init__(account_data)
         self.credentials = credentials
+        self._prefer_no_project = bool(
+            self.account_data.get("preferNoProjectForQuota", False)
+        )
 
     @property
     def provider_name(self) -> str:
@@ -510,14 +515,31 @@ class GoogleProvider(BaseProvider):
 
     def _make_quota_request(self, url, headers, project_id):
         """Make a quota request, falling back to no project_id on failure."""
-        body = {"project": project_id} if project_id else {}
-        response = requests.post(url, headers=headers, json=body, timeout=10)
-        if response.status_code != 200:
+        if project_id and not self._prefer_no_project:
+            response = requests.post(
+                url,
+                headers=headers,
+                json={"project": project_id},
+                timeout=DEFAULT_QUOTA_TIMEOUT,
+            )
+            if response.status_code == 200:
+                self._prefer_no_project = False
+                return response
+
             logger.debug(
                 f"Quota Error ({project_id}) [{response.status_code}]: {response.text}"
             )
-        if response.status_code != 200 and project_id:
-            response = requests.post(url, headers=headers, json={}, timeout=10)
+
+            self._prefer_no_project = True
+
+        response = requests.post(
+            url,
+            headers=headers,
+            json={},
+            timeout=DEFAULT_QUOTA_TIMEOUT,
+        )
+        if response.status_code == 200:
+            self._prefer_no_project = True
         return response
 
     @staticmethod
