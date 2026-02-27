@@ -18,7 +18,7 @@ def test_cli_no_accounts_file(mock_auth_mgr_cls, mock_config_cls):
     mock_config.auth_path.exists.return_value = False
 
     runner = CliRunner()
-    result = runner.invoke(main)
+    result = runner.invoke(main, ["show"])
     assert result.exit_code == 0
     assert "Accounts file not found" in result.output
 
@@ -33,7 +33,7 @@ def test_cli_empty_accounts(mock_auth_mgr_cls, mock_config_cls):
     mock_auth_mgr.load_accounts.return_value = []
 
     runner = CliRunner()
-    result = runner.invoke(main)
+    result = runner.invoke(main, ["show"])
     assert result.exit_code == 0
     assert "No accounts found in file" in result.output
 
@@ -56,7 +56,7 @@ def test_cli_list_quotas(mock_quota_client_cls, mock_auth_mgr_cls, mock_config_c
     mock_client.provider.provider_name = "Google"
 
     runner = CliRunner()
-    result = runner.invoke(main)
+    result = runner.invoke(main, ["show"])
     assert result.exit_code == 0
     assert "Quota Status" in result.output
     assert "test@example.com" in result.output
@@ -77,7 +77,7 @@ def test_cli_logout_interactive_happy_path(
 
     runner = CliRunner()
     # Provider 1 (Google), auto-skips account menu (1 account), confirm yes
-    result = runner.invoke(main, ["--logout"], input="1\ny\n")
+    result = runner.invoke(main, ["show", "--logout"], input="1\ny\n")
     assert result.exit_code == 0
     assert "Successfully logged out" in result.output
     mock_auth_mgr.logout.assert_called_once_with("test@example.com")
@@ -98,7 +98,7 @@ def test_cli_logout_interactive_multiple_accounts(
 
     runner = CliRunner()
     # Provider 1 (Google), account 2, confirm yes
-    result = runner.invoke(main, ["--logout"], input="1\n2\ny\n")
+    result = runner.invoke(main, ["show", "--logout"], input="1\n2\ny\n")
     assert result.exit_code == 0
     assert "Successfully logged out" in result.output
     mock_auth_mgr.logout.assert_called_once_with("b@example.com")
@@ -111,7 +111,7 @@ def test_cli_logout_interactive_no_accounts(mock_auth_mgr_cls, mock_config_cls):
     mock_auth_mgr.accounts = []
 
     runner = CliRunner()
-    result = runner.invoke(main, ["--logout"])
+    result = runner.invoke(main, ["show", "--logout"])
     assert result.exit_code == 0
     assert "No accounts found" in result.output
     mock_auth_mgr.logout.assert_not_called()
@@ -129,7 +129,7 @@ def test_cli_logout_interactive_cancel(
 
     runner = CliRunner()
     # Provider 1 (Google), confirm no
-    result = runner.invoke(main, ["--logout"], input="1\nN\n")
+    result = runner.invoke(main, ["show", "--logout"], input="1\nN\n")
     assert result.exit_code == 0
     assert "cancelled" in result.output.lower()
     mock_auth_mgr.logout.assert_not_called()
@@ -145,7 +145,7 @@ def test_cli_logout_all_confirmed(mock_auth_mgr_cls, mock_config_cls):
     ]
 
     runner = CliRunner()
-    result = runner.invoke(main, ["--logout-all"], input="y\n")
+    result = runner.invoke(main, ["show", "--logout-all"], input="y\n")
     assert result.exit_code == 0
     assert "Successfully logged out from all accounts" in result.output
     mock_auth_mgr.logout_all.assert_called_once()
@@ -158,7 +158,7 @@ def test_cli_logout_all_cancelled(mock_auth_mgr_cls, mock_config_cls):
     mock_auth_mgr.accounts = [{"email": "a@example.com", "type": "google"}]
 
     runner = CliRunner()
-    result = runner.invoke(main, ["--logout-all"], input="N\n")
+    result = runner.invoke(main, ["show", "--logout-all"], input="N\n")
     assert result.exit_code == 0
     assert "cancelled" in result.output.lower()
     mock_auth_mgr.logout_all.assert_not_called()
@@ -189,7 +189,7 @@ def test_cli_list_quotas_json(
     ]
 
     runner = CliRunner()
-    result = runner.invoke(main, ["--json"])
+    result = runner.invoke(main, ["show", "--json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert len(data) == 1
@@ -220,7 +220,7 @@ def test_cli_login_interactive(
 
     runner = CliRunner()
     # Choice 1 for Google
-    result = runner.invoke(main, ["--login"], input="1\n")
+    result = runner.invoke(main, ["show", "--login"], input="1\n")
     assert result.exit_code == 0
     assert "Successfully logged in as test@example.com" in result.output
 
@@ -238,7 +238,7 @@ def test_cli_update_project_id(mock_auth_mgr_cls, mock_config_cls):
 
     runner = CliRunner()
     result = runner.invoke(
-        main, ["--account", "test@example.com", "--project-id", "new-id"]
+        main, ["show", "--account", "test@example.com", "--project-id", "new-id"]
     )
     assert result.exit_code == 0
     assert "Updated metadata for test@example.com" in result.output
@@ -258,7 +258,7 @@ def test_cli_login_failure_json(
     mock_client.provider.login.side_effect = Exception("API Error")
 
     runner = CliRunner()
-    result = runner.invoke(main, ["--login", "--json"])
+    result = runner.invoke(main, ["show", "--login", "--json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["status"] == "error"
@@ -286,7 +286,7 @@ def test_cli_fetch_errors(mock_auth_mgr_cls, mock_config_cls):
     mock_auth_mgr.refresh_credentials.side_effect = Exception("Refresh Error")
 
     runner = CliRunner()
-    result = runner.invoke(main)
+    result = runner.invoke(main, ["show"])
     assert result.exit_code == 0
     assert "Could not load credentials for fail-creds@example.com" in result.output
     assert "Token refresh failed: Refresh Error" in result.output
@@ -302,6 +302,6 @@ def test_cli_account_not_found(mock_auth_mgr_cls, mock_config_cls):
     mock_auth_mgr.load_accounts.return_value = [{"email": "other@example.com"}]
 
     runner = CliRunner()
-    result = runner.invoke(main, ["--account", "missing@example.com"])
+    result = runner.invoke(main, ["show", "--account", "missing@example.com"])
     assert result.exit_code == 0
     assert "Account missing@example.com not found" in result.output
