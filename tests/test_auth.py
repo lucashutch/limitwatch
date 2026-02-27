@@ -1,10 +1,10 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from gemini_quota.auth import AuthManager
+from limitwatch.auth import AuthManager
 
 
-@patch("gemini_quota.providers.google.InstalledAppFlow")
-@patch("gemini_quota.providers.google.google.auth.transport.requests.AuthorizedSession")
+@patch("limitwatch.providers.google.InstalledAppFlow")
+@patch("limitwatch.providers.google.google.auth.transport.requests.AuthorizedSession")
 def test_auth_manager_login_google(mock_session_cls, mock_flow_cls, tmp_path):
     auth_file = tmp_path / "accounts.json"
     auth_mgr = AuthManager(auth_file)

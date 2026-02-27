@@ -1,7 +1,7 @@
 [project]
-name = "gemini-quota"
+name = "limitwatch"
 dynamic = ["version"]
-description = "A powerful CLI tool to monitor Gemini and Chutes.ai quotas"
+description = "A powerful CLI tool to monitor API quota usage across multiple providers"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-gemini-quota = "gemini_quota.cli:main"
+limitwatch = "limitwatch.cli:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -25,19 +25,15 @@ build-backend = "hatchling.build"
 source = "vcs"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/gemini_quota"]
+packages = ["src/limitwatch"]
 
 [dependency-groups]
-dev = [
-    "pytest>=7.3.1",
-    "pytest-cov>=7.0.0",
-    "pytest-sugar>=1.0.0",
-]
+dev = ["pytest>=7.3.1", "pytest-cov>=7.0.0", "pytest-sugar>=1.0.0"]
 
 [tool.uv]
 package = true
 
 [tool.pytest.ini_options]
-addopts = "--cov=src/gemini_quota --cov-report=term-missing"
+addopts = "--cov=src/limitwatch --cov-report=term-missing"
 testpaths = ["tests"]
 pythonpath = ["src"]

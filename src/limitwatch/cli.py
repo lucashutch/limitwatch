@@ -13,7 +13,7 @@ from .display import DisplayManager
 logger = logging.getLogger(__name__)
 
 try:
-    __version__ = version("gemini-quota")
+    __version__ = version("limitwatch")
 except PackageNotFoundError:
     __version__ = "unknown"
 
@@ -327,7 +327,7 @@ def _build_json_results(indices_to_check, idx_to_result, display, show_all, quer
 
 
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
-@click.version_option(__version__, "--version", "-v", prog_name="gemini-quota")
+@click.version_option(__version__, "--version", "-v", prog_name="limitwatch")
 @click.option("-a", "--account", help="Email of the account to check.")
 @click.option("--alias", help="Set an alias for an account (requires --account).")
 @click.option(
@@ -375,7 +375,7 @@ def main(
     logout_all,
     verbose,
 ):
-    """Query Gemini CLI/Code Assist quota usage and reset times across all accounts."""
+    """Monitor API quota usage and reset times across all accounts."""
     log_level = logging.DEBUG if verbose else logging.WARNING
     logging.basicConfig(level=log_level, format="%(message)s", datefmt="[%X]")
 

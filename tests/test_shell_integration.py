@@ -1,11 +1,11 @@
 from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
-from gemini_quota.cli import main
+from limitwatch.cli import main
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
-@patch("gemini_quota.cli.QuotaClient")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+@patch("limitwatch.cli.QuotaClient")
 def test_cli_query_matching(mock_quota_client_cls, mock_auth_mgr_cls, mock_config_cls):
     mock_config = mock_config_cls.return_value
     mock_config.auth_path.exists.return_value = True
@@ -29,7 +29,7 @@ def test_cli_query_matching(mock_quota_client_cls, mock_auth_mgr_cls, mock_confi
     mock_client.get_color.return_value = "cyan"
     mock_client.get_sort_key.return_value = (0, 0, "a")
     # Mock display.filter_quotas to return what we want
-    with patch("gemini_quota.cli.DisplayManager.filter_quotas") as mock_filter:
+    with patch("limitwatch.cli.DisplayManager.filter_quotas") as mock_filter:
         mock_filter.return_value = mock_client.fetch_quotas.return_value
 
         runner = CliRunner()
@@ -45,9 +45,9 @@ def test_cli_query_matching(mock_quota_client_cls, mock_auth_mgr_cls, mock_confi
 
 def test_cli_query_no_match_exit_code():
     with (
-        patch("gemini_quota.cli.Config") as mock_config_cls,
-        patch("gemini_quota.cli.AuthManager") as mock_auth_mgr_cls,
-        patch("gemini_quota.cli.QuotaClient") as mock_quota_client_cls,
+        patch("limitwatch.cli.Config") as mock_config_cls,
+        patch("limitwatch.cli.AuthManager") as mock_auth_mgr_cls,
+        patch("limitwatch.cli.QuotaClient") as mock_quota_client_cls,
     ):
         mock_config = mock_config_cls.return_value
         mock_config.auth_path.exists.return_value = True
@@ -64,9 +64,9 @@ def test_cli_query_no_match_exit_code():
         assert result.exit_code == 1
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
-@patch("gemini_quota.cli.QuotaClient")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+@patch("limitwatch.cli.QuotaClient")
 def test_cli_multiple_queries_and_match(
     mock_quota_client_cls, mock_auth_mgr_cls, mock_config_cls
 ):
@@ -97,7 +97,7 @@ def test_cli_multiple_queries_and_match(
     mock_client.get_color.return_value = "cyan"
     mock_client.get_sort_key.return_value = (0, 0, "a")
 
-    with patch("gemini_quota.cli.DisplayManager.filter_quotas") as mock_filter:
+    with patch("limitwatch.cli.DisplayManager.filter_quotas") as mock_filter:
         mock_filter.return_value = mock_client.fetch_quotas.return_value
 
         runner = CliRunner()
@@ -109,8 +109,8 @@ def test_cli_multiple_queries_and_match(
         assert "Claude 3 Sonnet" not in result.output
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
 def test_cli_provider_filter(mock_auth_mgr_cls, mock_config_cls):
     mock_config = mock_config_cls.return_value
     mock_config.auth_path.exists.return_value = True
@@ -121,7 +121,7 @@ def test_cli_provider_filter(mock_auth_mgr_cls, mock_config_cls):
         {"email": "chutes@test.com", "type": "chutes"},
     ]
 
-    with patch("gemini_quota.cli.fetch_account_data") as mock_fetch:
+    with patch("limitwatch.cli.fetch_account_data") as mock_fetch:
         mock_fetch.return_value = ("test", [], MagicMock(), None)
 
         runner = CliRunner()

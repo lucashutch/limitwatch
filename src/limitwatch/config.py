@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-DEFAULT_CONFIG_DIR = Path.home() / ".config" / "gemini-quota"
+DEFAULT_CONFIG_DIR = Path.home() / ".config" / "limitwatch"
 DEFAULT_CONFIG_FILE = DEFAULT_CONFIG_DIR / "config.json"
 MANAGED_ACCOUNTS_FILE = DEFAULT_CONFIG_DIR / "accounts.json"
 
