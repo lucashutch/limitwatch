@@ -461,6 +461,41 @@ class TestDrawQuotaBars:
         call_arg = display.console.print.call_args[0][0]
         assert "used" in call_arg
 
+    def test_text_only_quota_normal(self):
+        display = DisplayManager()
+        display.console = MagicMock()
+        display.console.width = 80
+        client = MagicMock()
+
+        quotas = [{"display_name": "Credits: $6.73 remaining", "show_progress": False}]
+        client.filter_quotas.return_value = quotas
+        client.get_sort_key.return_value = (0, 0, "a")
+        client.get_color.return_value = "white"
+
+        display.draw_quota_bars(quotas, client)
+        call_arg = display.console.print.call_args[0][0]
+        assert "Credits: $6.73 remaining" in call_arg
+        assert "█" not in call_arg
+        assert "%" not in call_arg
+
+    def test_text_only_quota_compact(self):
+        display = DisplayManager()
+        display.console = MagicMock()
+        display.console.width = 80
+        client = MagicMock()
+        client.short_indicator = "R"
+        client.primary_color = "cyan"
+
+        quotas = [{"display_name": "Credits: $6.73 remaining", "show_progress": False}]
+        client.filter_quotas.return_value = quotas
+        client.get_sort_key.return_value = (0, 0, "a")
+
+        display.draw_quota_bars(quotas, client, compact=True, account_name="key-prod")
+        call_arg = display.console.print.call_args[0][0]
+        assert "Credits: $6.73 remaining" in call_arg
+        assert "█" not in call_arg
+        assert "%" not in call_arg
+
     def test_compact_error_quota(self):
         display = DisplayManager()
         display.console = MagicMock()

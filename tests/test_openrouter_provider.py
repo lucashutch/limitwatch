@@ -149,6 +149,7 @@ def test_fetch_quotas_credits_endpoint(mock_get):
     assert abs(r["used"] - 25.75) < 0.001
     assert r["limit"] == 100.0
     assert abs(r["remaining_pct"] - 74.25) < 0.1
+    assert r["show_progress"] is False
     assert r["source_type"] == "OpenRouter"
 
 
@@ -203,6 +204,7 @@ def test_fetch_quotas_key_info_fallback_with_limit(mock_get):
     assert r["endpoint"] == "auth/key"
     assert abs(r["remaining"] - 45.0) < 0.001
     assert abs(r["remaining_pct"] - 90.0) < 0.1
+    assert r["show_progress"] is False
 
 
 @patch("limitwatch.providers.openrouter.requests.get")
@@ -227,6 +229,7 @@ def test_fetch_quotas_key_info_no_limit(mock_get):
     results = provider.fetch_quotas()
     r = results[0]
     assert r["remaining_pct"] == 100.0
+    assert r["show_progress"] is False
     assert "spent" in r["display_name"]
 
 
