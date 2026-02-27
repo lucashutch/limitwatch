@@ -116,7 +116,9 @@ class DisplayManager:
             self.console.print(f"{prefix}{name[:18]:18} {bar} {suffix}{reset_str}")
 
     def _draw_normal(self, filtered_quotas, client):
-        reserved_width = 45
+        # Reserve space for: padded_name(22) + space(1) + suffix(8) + reset_str(~20)
+        # Reduce end-of-row buffer from 60 to 50 to allow more bar space
+        reserved_width = 50
         terminal_width = self.console.width
         bar_width = max(10, min(60, terminal_width - reserved_width))
 
