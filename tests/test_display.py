@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
-from gemini_quota.display import (
+from limitwatch.display import (
     DisplayManager,
     apply_query_filter,
     extract_percentages,

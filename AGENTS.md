@@ -1,6 +1,6 @@
-# Agent Instructions for Gemini Quota
+# Agent Instructions for LimitWatch
 
-This repository contains a CLI tool for monitoring quota usage across multiple providers (Gemini, Antigravity, Chutes.ai).
+This repository contains a CLI tool for monitoring quota usage across multiple providers (Gemini, Antigravity, Chutes.ai, GitHub Copilot, OpenAI).
 
 ## 🛠 Build, Lint, and Test
 - ALWAYS format code and check linting before commiting
@@ -10,11 +10,11 @@ The project uses [uv](https://github.com/astral-sh/uv) for dependency management
 
 ### Commands
 - **Install Dependencies:** `uv sync`
-- **Run CLI:** `uv run gemini-quota`
+- **Run CLI:** `uv run limitwatch`
 - **Testing:** `uv run pytest`
 
 ### Project Structure
-- `src/gemini_quota/`:
+- `src/limitwatch/`:
     - `cli.py`: CLI entry point using `click`. Handles the main loop and interactive login flow.
     - `quota_client.py`: The **Orchestrator**. It instantiates the correct provider and delegates fetching/filtering/sorting.
     - `auth.py`: Manages account storage and credential loading. Delegates login to providers.
