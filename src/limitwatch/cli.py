@@ -4,6 +4,7 @@ import click
 import logging
 import time
 import concurrent.futures
+from pathlib import Path
 from importlib.metadata import version, PackageNotFoundError
 from .config import Config
 from .auth import AuthManager
@@ -381,12 +382,17 @@ def _build_json_results(indices_to_check, idx_to_result, display, show_all, quer
 # --- Main CLI group ---
 
 
-@click.group(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.group(
+    context_settings=dict(help_option_names=["-h", "--help"]),
+    invoke_without_command=True,
+)
 @click.version_option(__version__, "--version", "-v", prog_name="limitwatch")
 @click.pass_context
 def cli(ctx):
     """Monitor API quota usage and reset times across all accounts."""
     ctx.ensure_object(dict)
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(show)
 
 
 @cli.command(name="show")
@@ -600,6 +606,12 @@ def show(
 @click.option(
     "--bars", "view_type", flag_value="bars", help="Show daily credit consumption bars"
 )
+@click.option(
+    "--stats",
+    "view_type",
+    flag_value="stats",
+    help="Show comprehensive statistics dashboard",
+)
 @click.option("--verbose", is_flag=True, help="Enable verbose logging")
 def history_command(
     preset, since, until, account, provider, quota, table, summary, view_type, verbose
@@ -617,7 +629,7 @@ def history_command(
         display.print_history_summary(info)
         return
 
-    if view_type in ("heatmap", "chart", "calendar", "bars"):
+    if view_type in ("heatmap", "chart", "calendar", "bars", "stats"):
         try:
             weekly_data = history_mgr.get_weekly_activity(
                 account_email=account,
@@ -632,6 +644,27 @@ def history_command(
                 display.render_calendar_view(weekly_data)
             elif view_type == "bars":
                 display.render_daily_bars(weekly_data)
+            elif view_type == "stats":
+                # Fetch additional data needed for the stats dashboard
+                effective_preset = preset or "7d"
+                history_data = history_mgr.get_history(
+                    preset=effective_preset,
+                    since=since,
+                    until=until,
+                    account_email=account,
+                    provider_type=provider,
+                    quota_name=quota,
+                )
+                aggregation_data = history_mgr.get_aggregation(
+                    preset=effective_preset,
+                    since=since,
+                    until=until,
+                    account_email=account,
+                    provider_type=provider,
+                )
+                display.render_stats_dashboard(
+                    history_data, weekly_data, aggregation_data
+                )
 
         except Exception as e:
             display.console.print(f"[red]Error:[/red] {e}")
