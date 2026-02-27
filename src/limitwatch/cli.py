@@ -9,6 +9,7 @@ from .config import Config
 from .auth import AuthManager
 from .quota_client import QuotaClient
 from .display import DisplayManager
+from .history import HistoryManager
 
 logger = logging.getLogger(__name__)
 
@@ -413,6 +414,9 @@ def _build_json_results(indices_to_check, idx_to_result, display, show_all, quer
     "--logout", is_flag=True, help="Log out from a saved account interactively."
 )
 @click.option("--logout-all", is_flag=True, help="Logout from all accounts.")
+@click.option(
+    "--no-record", is_flag=True, help="Skip recording quota data to history database."
+)
 @click.option("--verbose", is_flag=True, help="Enable verbose logging.")
 def main(
     account,
@@ -428,6 +432,7 @@ def main(
     project_id,
     logout,
     logout_all,
+    no_record,
     verbose,
 ):
     """Monitor API quota usage and reset times across all accounts."""
@@ -509,6 +514,19 @@ def main(
         idx_to_result = _fetch_all_quotas(
             indices_to_check, auth_mgr, show_all, display, json_output
         )
+
+        # --- Record to history database ---
+        if not no_record and config.history_enabled:
+            try:
+                history_mgr = HistoryManager(config.history_db_path)
+                for idx, acc_data in indices_to_check:
+                    email, quotas, client, error = idx_to_result[idx]
+                    if quotas and not error and client:
+                        account_type = acc_data.get("type", "unknown")
+                        history_mgr.record_quotas(email, account_type, quotas)
+                        logger.debug(f"Recorded quotas to history for {email}")
+            except Exception as e:
+                logger.warning(f"Failed to record quota history: {e}")
 
         # --- Render output ---
         if json_output:
