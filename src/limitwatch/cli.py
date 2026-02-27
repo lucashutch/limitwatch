@@ -693,10 +693,10 @@ def export_command(
 cli.add_command(show, name="")
 
 
-def main():
-    """Entry point for the CLI."""
+# Export the CLI group as 'main' for backward compatibility with tests
+main = cli
+
+
+def cli_entry_point():
+    """Entry point for the CLI (used by setup.py/pyproject.toml)."""
     cli()
-
-
-if __name__ == "__main__":
-    main()
