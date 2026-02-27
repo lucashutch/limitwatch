@@ -10,6 +10,7 @@ dependencies = [
     "google-auth>=2.48.0",
     "google-auth-oauthlib>=1.2.4",
     "google-cloud-quotas>=0.5.0",
+    "jsonschema>=4.23.0",
     "requests>=2.32.5",
     "rich>=14.3.2",
 ]
