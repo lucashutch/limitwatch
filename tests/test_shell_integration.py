@@ -34,7 +34,7 @@ def test_cli_query_matching(mock_quota_client_cls, mock_auth_mgr_cls, mock_confi
 
         runner = CliRunner()
         # Case insensitive match
-        result = runner.invoke(main, ["--query", "GEMINI"])
+        result = runner.invoke(main, ["show", "--query", "GEMINI"])
         assert result.exit_code == 0
         assert "Gemini 3 Pro" in result.output
         assert "Claude 3 Sonnet" not in result.output
@@ -60,7 +60,7 @@ def test_cli_query_no_match_exit_code():
         ]
 
         runner = CliRunner()
-        result = runner.invoke(main, ["--query", "nonexistent"])
+        result = runner.invoke(main, ["show", "--query", "nonexistent"])
         assert result.exit_code == 1
 
 
@@ -102,7 +102,7 @@ def test_cli_multiple_queries_and_match(
 
         runner = CliRunner()
         # AND match: "gemini" and "pro"
-        result = runner.invoke(main, ["-q", "gemini", "-q", "pro"])
+        result = runner.invoke(main, ["show", "-q", "gemini", "-q", "pro"])
         assert result.exit_code == 0
         assert "Gemini 3 Pro" in result.output
         assert "Gemini 3 Flash" not in result.output
@@ -125,7 +125,7 @@ def test_cli_provider_filter(mock_auth_mgr_cls, mock_config_cls):
         mock_fetch.return_value = ("test", [], MagicMock(), None)
 
         runner = CliRunner()
-        runner.invoke(main, ["--provider", "chutes"])
+        runner.invoke(main, ["show", "--provider", "chutes"])
 
         # Check that fetch_account_data was only called once for chutes
         assert mock_fetch.call_count == 1

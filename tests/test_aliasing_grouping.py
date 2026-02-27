@@ -20,7 +20,15 @@ def test_cli_set_alias_and_group(
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["--account", "test@example.com", "--alias", "work", "--group", "professional"],
+        [
+            "show",
+            "--account",
+            "test@example.com",
+            "--alias",
+            "work",
+            "--group",
+            "professional",
+        ],
     )
 
     assert result.exit_code == 0
@@ -47,7 +55,7 @@ def test_cli_filter_by_group(mock_fetch, mock_auth_mgr_cls, mock_config_cls):
     mock_fetch.return_value = ("test", [], MagicMock(), None)
 
     runner = CliRunner()
-    result = runner.invoke(main, ["-g", "work"])
+    result = runner.invoke(main, ["show", "-g", "work"])
 
     assert result.exit_code == 0
     # Check that fetch_account_data was only called once for the "work" account
@@ -73,7 +81,7 @@ def test_cli_display_alias_and_group(mock_fetch, mock_auth_mgr_cls, mock_config_
     mock_fetch.return_value = ("test@example.com", [], mock_client, None)
 
     runner = CliRunner()
-    result = runner.invoke(main)
+    result = runner.invoke(main, ["show"])
 
     assert result.exit_code == 0
     assert "MyAccount" in result.output
@@ -94,7 +102,8 @@ def test_cli_clear_metadata(mock_auth_mgr_cls, mock_config_cls):
     runner = CliRunner()
     # Clear alias with empty string and group with "none"
     result = runner.invoke(
-        main, ["--account", "test@example.com", "--alias", "", "--group", "none"]
+        main,
+        ["show", "--account", "test@example.com", "--alias", "", "--group", "none"],
     )
 
     assert result.exit_code == 0
@@ -118,7 +127,7 @@ def test_cli_logout_shows_alias(
 
     runner = CliRunner()
     # Provider 1 (Google), single account (skip account menu), confirm yes
-    result = runner.invoke(main, ["--logout"], input="1\ny\n")
+    result = runner.invoke(main, ["show", "--logout"], input="1\ny\n")
     assert result.exit_code == 0
     assert "myalias" in result.output
     mock_auth_mgr.logout.assert_called_once_with("test@example.com")
