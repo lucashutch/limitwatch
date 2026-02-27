@@ -1,23 +1,29 @@
 # LimitWatch
 
-A powerful Python CLI tool to monitor your **Gemini CLI**, **Antigravity**, **Chutes.ai**, **GitHub Copilot**, and **OpenAI** quota usage and reset times across multiple accounts.
+A Python CLI tool to monitor quota usage, reset times, and credits across **Google (Gemini CLI + Antigravity)**, **GitHub Copilot**, **Chutes.ai**, **OpenAI Codex**, and **OpenRouter** accounts.
 
 ## Features
 
-- **🚀 Modular Provider Architecture**: Easily extensible system supporting Google (Gemini/Antigravity) and Chutes.ai.
-- **🔐 Unified Login**: Interactive login flow (`limitwatch --login`) that lets you select your provider and handles authentication (OAuth for Google, API keys for Chutes).
-- **👥 Multi-Account Support**: Manage and monitor multiple accounts from different providers simultaneously.
-- **🔍 Source Separation**: Distinct color coding for each source:
-  - **Gemini CLI**: Cyan
-  - **Antigravity**: Magenta
-  - **Chutes.ai**: Yellow
-- **🕒 Real-time Reset Countdown**: Automatically calculates and shows time remaining until your quota resets (e.g., `2h 15m`).
-- **📊 Detailed Usage Stats**: Shows used/total units (e.g., `285/300`) and visual progress bars colored by availability.
-- **🧠 Smart Filtering**:
-  - Shows primary premium models by default.
-  - Automatically shows legacy models if they are the only ones available.
-  - Hides verbose/experimental models behind the `--show-all` flag.
-- **📄 JSON Output**: Integration-ready JSON output for use in scripts or dashboards.
+- **🔌 Multi-provider support**: View quotas/credits from Google, GitHub Copilot, Chutes.ai, OpenAI Codex, and OpenRouter in one run.
+- **🔐 Unified interactive login**: Use `limitwatch --login` to select a provider and authenticate with the provider-specific flow.
+- **👥 Multi-account monitoring**: Track multiple accounts per provider and render them together.
+- **🏷️ Account aliases**: Assign friendly names with `--alias` and target accounts by alias.
+- **🗂️ Account groups**: Assign accounts to groups with `--group` and filter output by group.
+- **🎯 Flexible filtering**: Filter by account, provider, group, and model text; optionally show all model variants.
+- **📊 Rich quota display**: Progress bars, used/total context, remaining percentage, and reset countdowns.
+- **🧠 Smart model selection**: Prioritizes primary premium models by default while preserving useful fallbacks.
+- **🧾 Multiple output modes**: Standard view, compact view (`--compact`), and script-friendly JSON (`--json`).
+- **🧱 Modular provider architecture**: Providers are isolated and extensible through the shared base interface.
+
+## Supported Providers & Authentication
+
+| Provider | What is monitored | Authentication method |
+| --- | --- | --- |
+| **Google** | Gemini CLI + Antigravity quotas | OAuth device/browser flow via Google account login |
+| **GitHub Copilot** | Personal and optional org Copilot usage | GitHub token (auto-discovered from `gh auth token` when available, or entered manually) |
+| **Chutes.ai** | Balance and quota usage | API key |
+| **OpenAI Codex** | Codex plan usage windows (e.g., primary/secondary periods) | Existing local OpenAI/Codex tokens if found, otherwise OpenAI device-code login |
+| **OpenRouter** | Remaining credits / key usage | API key (management or regular key) |
 
 ## Installation
 
@@ -51,15 +57,25 @@ limitwatch
 ```text
 Quota Status
 
-📧 Account: user@example.com (google)
-Gemini 3 Flash (CLI)  ████████████████████████                60.0% (14h 22m)
-Gemini 3 Pro (CLI)    ████████████                            30.0% (4h 15m)
-Gemini 3 Flash (AG)   ████████████████████████████████        80.0% (5d 12h)
-Claude (AG)           ████████████████                        40.0% (2d 19m)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📧 Account: developer (chutes)
-Balance: $10.50       ██████████████████████████████████████  100.0%
-Quota (285/300)       ██████████████████████████████████      95.0% (2h 15m)
+📧 Google: dev-home (u***@example.com)
+Gemini Flash (CLI)     ████████████████████████████████████▍               76.4% (11h 12m)
+Gemini Pro (CLI)       ██████████████████████████▉                         58.1% (2h 49m)
+Gemini Flash (AG)      ████████████████████████████████████████▏           84.7% (3d 7h)
+Claude (AG)            ████████████████████████                            52.0% (1d 5h)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📧 GitHub Copilot: work-gh
+Myriota                ██████████████████▎                                  31.2% used
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📧 Chutes: c***-primary
+Balance: $18.40        ██████████████████████████████████████████████████ 100.0%
+Quota (267/300)        ███████████████████████████████████████████▍        89.0% (7h 42m)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📧 OpenAI Codex: l***@example.com
+Primary (7d)           ████▊                                                8.0% used (5d 18h)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📧 OpenRouter: key-prod
+Credits: $6.73 remaining █████████████████████                              67.3%
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 

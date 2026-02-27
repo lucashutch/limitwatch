@@ -50,6 +50,80 @@ def test_login_missing_key_raises():
         provider.login(api_key="")
 
 
+@patch("limitwatch.providers.openrouter.requests.get")
+def test_login_explicit_name_kwarg_overrides_label(mock_get):
+    """A `name` kwarg takes priority over the API-returned label."""
+    provider = OpenRouterProvider({})
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {"data": {"label": "sk-or-v1-5f2...aaa"}}
+
+    result = provider.login(api_key="sk-or-v1-abc", name="limitwatch_work_laptop")
+    assert result["email"] == "limitwatch_work_laptop"
+
+
+@patch("limitwatch.providers.openrouter.requests.get")
+def test_login_uses_non_redacted_label(mock_get):
+    """When the API returns a real name (no '...'), use it directly."""
+    provider = OpenRouterProvider({})
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {"data": {"label": "my-named-key"}}
+
+    result = provider.login(api_key="sk-or-v1-abc")
+    assert result["email"] == "my-named-key"
+
+
+# ---------------------------------------------------------------------------
+# interactive_login
+# ---------------------------------------------------------------------------
+
+
+@patch("click.prompt")
+@patch("limitwatch.providers.openrouter.requests.get")
+def test_interactive_login_prompts_friendly_name_when_redacted(mock_get, mock_prompt):
+    """When the API label looks like a redacted key, user is prompted for a name."""
+    provider = OpenRouterProvider({})
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {"data": {"label": "sk-or-v1-5f2...aaa"}}
+    # First prompt: API key, second: friendly name
+    mock_prompt.side_effect = ["sk-or-v1-realkey", "limitwatch_work_laptop"]
+
+    result = provider.interactive_login(MagicMock())
+
+    assert result["email"] == "limitwatch_work_laptop"
+    assert result["apiKey"] == "sk-or-v1-realkey"
+    assert mock_prompt.call_count == 2
+
+
+@patch("click.prompt")
+@patch("limitwatch.providers.openrouter.requests.get")
+def test_interactive_login_keeps_default_redacted_if_unchanged(mock_get, mock_prompt):
+    """If user doesn't change the default name, the redacted label is stored."""
+    provider = OpenRouterProvider({})
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {"data": {"label": "sk-or-v1-5f2...aaa"}}
+    # User accepts the default (returns the same redacted key string)
+    mock_prompt.side_effect = ["sk-or-v1-realkey", "sk-or-v1-5f2...aaa"]
+
+    result = provider.interactive_login(MagicMock())
+
+    assert result["email"] == "sk-or-v1-5f2...aaa"
+
+
+@patch("click.prompt")
+@patch("limitwatch.providers.openrouter.requests.get")
+def test_interactive_login_skips_name_prompt_for_real_label(mock_get, mock_prompt):
+    """When API label is a real name (no '...'), skip the name prompt."""
+    provider = OpenRouterProvider({})
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {"data": {"label": "my-production-key"}}
+    mock_prompt.return_value = "sk-or-v1-realkey"
+
+    result = provider.interactive_login(MagicMock())
+
+    assert result["email"] == "my-production-key"
+    assert mock_prompt.call_count == 1  # only the API key prompt
+
+
 # ---------------------------------------------------------------------------
 # fetch_quotas – credits endpoint (management key)
 # ---------------------------------------------------------------------------
