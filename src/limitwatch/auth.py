@@ -5,6 +5,8 @@ from typing import Dict, Any, Optional, List
 import google.auth.transport.requests
 from google.oauth2.credentials import Credentials
 
+from .config import ACCOUNTS_SCHEMA, validate_schema
+
 # Configure logger
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,7 @@ class AuthManager:
             with open(self.auth_path, "r") as f:
                 data = json.load(f)
 
+            validate_schema(data, ACCOUNTS_SCHEMA, "accounts.json")
             self.accounts = data.get("accounts", [])
             self.active_index = data.get("activeIndex", 0)
             return self.accounts
