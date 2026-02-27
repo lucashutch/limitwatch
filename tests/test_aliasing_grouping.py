@@ -1,11 +1,11 @@
 from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
-from gemini_quota.cli import main
+from limitwatch.cli import main
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
-@patch("gemini_quota.cli.QuotaClient")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+@patch("limitwatch.cli.QuotaClient")
 def test_cli_set_alias_and_group(
     mock_quota_client_cls, mock_auth_mgr_cls, mock_config_cls
 ):
@@ -31,9 +31,9 @@ def test_cli_set_alias_and_group(
     )
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
-@patch("gemini_quota.cli.fetch_account_data")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+@patch("limitwatch.cli.fetch_account_data")
 def test_cli_filter_by_group(mock_fetch, mock_auth_mgr_cls, mock_config_cls):
     mock_config = mock_config_cls.return_value
     mock_config.auth_path.exists.return_value = True
@@ -56,9 +56,9 @@ def test_cli_filter_by_group(mock_fetch, mock_auth_mgr_cls, mock_config_cls):
     assert args[1]["email"] == "work@example.com"
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
-@patch("gemini_quota.cli.fetch_account_data")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+@patch("limitwatch.cli.fetch_account_data")
 def test_cli_display_alias_and_group(mock_fetch, mock_auth_mgr_cls, mock_config_cls):
     mock_config = mock_config_cls.return_value
     mock_config.auth_path.exists.return_value = True
@@ -80,8 +80,8 @@ def test_cli_display_alias_and_group(mock_fetch, mock_auth_mgr_cls, mock_config_
     assert "(test@example.com|MyGroup)" in result.output
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
 def test_cli_clear_metadata(mock_auth_mgr_cls, mock_config_cls):
     mock_config = mock_config_cls.return_value
     mock_config.auth_path.exists.return_value = True

@@ -1,8 +1,8 @@
 from unittest.mock import MagicMock, patch
-from gemini_quota.quota_client import QuotaClient
+from limitwatch.quota_client import QuotaClient
 
 
-@patch("gemini_quota.providers.google.requests.post")
+@patch("limitwatch.providers.google.requests.post")
 def test_quota_client_google_fetch_cli(mock_post):
     creds = MagicMock()
     creds.token = "fake_token"
@@ -27,7 +27,7 @@ def test_quota_client_google_fetch_cli(mock_post):
     assert results[0]["remaining_pct"] == 80.0
 
 
-@patch("gemini_quota.providers.google.requests.post")
+@patch("limitwatch.providers.google.requests.post")
 def test_quota_client_google_fetch_ag(mock_post):
     creds = MagicMock()
     creds.token = "fake_token"
@@ -87,7 +87,7 @@ def test_quota_client_delegation():
     assert client.primary_color == "blue"
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_quota_client_github_copilot(mock_get):
     """Test QuotaClient with GitHub Copilot provider."""
     mock_get.return_value.status_code = 200

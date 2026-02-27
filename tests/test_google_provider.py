@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from gemini_quota.providers.google import GoogleProvider
+from limitwatch.providers.google import GoogleProvider
 
 
 def test_google_provider_metadata():
@@ -131,8 +131,8 @@ def test_fetch_antigravity_quotas(mock_post):
     assert any("Gemini Pro (AG)" == q["display_name"] for q in quotas)
 
 
-@patch("gemini_quota.providers.google.InstalledAppFlow")
-@patch("gemini_quota.providers.google.google.auth.transport.requests.AuthorizedSession")
+@patch("limitwatch.providers.google.InstalledAppFlow")
+@patch("limitwatch.providers.google.google.auth.transport.requests.AuthorizedSession")
 def test_google_provider_login_manual_project(mock_session_cls, mock_flow_cls):
     provider = GoogleProvider({"type": "google"})
 
@@ -151,8 +151,8 @@ def test_google_provider_login_manual_project(mock_session_cls, mock_flow_cls):
     assert account_data["refreshToken"] == "refresh_token"
 
 
-@patch("gemini_quota.providers.google.InstalledAppFlow")
-@patch("gemini_quota.providers.google.google.auth.transport.requests.AuthorizedSession")
+@patch("limitwatch.providers.google.InstalledAppFlow")
+@patch("limitwatch.providers.google.google.auth.transport.requests.AuthorizedSession")
 def test_google_provider_login_discovery(mock_session_cls, mock_flow_cls):
     provider = GoogleProvider({"type": "google"})
 
@@ -175,8 +175,8 @@ def test_google_provider_login_discovery(mock_session_cls, mock_flow_cls):
     assert account_data["projectId"] == "discovered-id"
 
 
-@patch("gemini_quota.providers.google.InstalledAppFlow")
-@patch("gemini_quota.providers.google.google.auth.transport.requests.AuthorizedSession")
+@patch("limitwatch.providers.google.InstalledAppFlow")
+@patch("limitwatch.providers.google.google.auth.transport.requests.AuthorizedSession")
 def test_google_provider_login_discovery_get_managed_project(
     mock_session_cls, mock_flow_cls
 ):
@@ -206,8 +206,8 @@ def test_google_provider_login_discovery_get_managed_project(
     assert account_data["projectId"] == "managed-id"
 
 
-@patch("gemini_quota.providers.google.InstalledAppFlow")
-@patch("gemini_quota.providers.google.google.auth.transport.requests.AuthorizedSession")
+@patch("limitwatch.providers.google.InstalledAppFlow")
+@patch("limitwatch.providers.google.google.auth.transport.requests.AuthorizedSession")
 def test_google_provider_login_discovery_cloud_resource_manager(
     mock_session_cls, mock_flow_cls
 ):
@@ -282,8 +282,8 @@ def test_google_provider_filter_quotas_no_premium():
     assert len(filtered) == 2
 
 
-@patch("gemini_quota.providers.google.InstalledAppFlow")
-@patch("gemini_quota.providers.google.google.auth.transport.requests.AuthorizedSession")
+@patch("limitwatch.providers.google.InstalledAppFlow")
+@patch("limitwatch.providers.google.google.auth.transport.requests.AuthorizedSession")
 def test_google_provider_login_no_email(mock_session_cls, mock_flow_cls):
     provider = GoogleProvider({"type": "google"})
     mock_flow = mock_flow_cls.from_client_config.return_value
@@ -297,8 +297,8 @@ def test_google_provider_login_no_email(mock_session_cls, mock_flow_cls):
         provider.login()
 
 
-@patch("gemini_quota.providers.google.InstalledAppFlow")
-@patch("gemini_quota.providers.google.google.auth.transport.requests.AuthorizedSession")
+@patch("limitwatch.providers.google.InstalledAppFlow")
+@patch("limitwatch.providers.google.google.auth.transport.requests.AuthorizedSession")
 def test_google_provider_login_crm_variations(mock_session_cls, mock_flow_cls):
     provider = GoogleProvider({"type": "google"})
     mock_flow = mock_flow_cls.from_client_config.return_value
@@ -354,8 +354,8 @@ def test_google_provider_login_crm_variations(mock_session_cls, mock_flow_cls):
     assert account_data["projectId"] == "active-2"
 
 
-@patch("gemini_quota.providers.google.InstalledAppFlow")
-@patch("gemini_quota.providers.google.google.auth.transport.requests.AuthorizedSession")
+@patch("limitwatch.providers.google.InstalledAppFlow")
+@patch("limitwatch.providers.google.google.auth.transport.requests.AuthorizedSession")
 def test_google_provider_login_final_fallback(mock_session_cls, mock_flow_cls):
     provider = GoogleProvider({"type": "google"})
     mock_flow = mock_flow_cls.from_client_config.return_value

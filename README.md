@@ -1,11 +1,11 @@
-# Gemini & Chutes.ai Quota Checker
+# LimitWatch
 
-A powerful Python CLI tool to monitor your **Gemini CLI**, **Antigravity**, and **Chutes.ai** quota usage and reset times across multiple accounts.
+A powerful Python CLI tool to monitor your **Gemini CLI**, **Antigravity**, **Chutes.ai**, **GitHub Copilot**, and **OpenAI** quota usage and reset times across multiple accounts.
 
 ## Features
 
 - **🚀 Modular Provider Architecture**: Easily extensible system supporting Google (Gemini/Antigravity) and Chutes.ai.
-- **🔐 Unified Login**: Interactive login flow (`gemini-quota --login`) that lets you select your provider and handles authentication (OAuth for Google, API keys for Chutes).
+- **🔐 Unified Login**: Interactive login flow (`limitwatch --login`) that lets you select your provider and handles authentication (OAuth for Google, API keys for Chutes).
 - **👥 Multi-Account Support**: Manage and monitor multiple accounts from different providers simultaneously.
 - **🔍 Source Separation**: Distinct color coding for each source:
   - **Gemini CLI**: Cyan
@@ -13,7 +13,7 @@ A powerful Python CLI tool to monitor your **Gemini CLI**, **Antigravity**, and 
   - **Chutes.ai**: Yellow
 - **🕒 Real-time Reset Countdown**: Automatically calculates and shows time remaining until your quota resets (e.g., `2h 15m`).
 - **📊 Detailed Usage Stats**: Shows used/total units (e.g., `285/300`) and visual progress bars colored by availability.
-- **🧠 Smart Filtering**: 
+- **🧠 Smart Filtering**:
   - Shows primary premium models by default.
   - Automatically shows legacy models if they are the only ones available.
   - Hides verbose/experimental models behind the `--show-all` flag.
@@ -40,10 +40,10 @@ uv tool install .
 
 ```bash
 # Initial setup: login to your account(s)
-gemini-quota --login
+limitwatch --login
 
 # View your quotas
-gemini-quota
+limitwatch
 ```
 
 ### Example Output
@@ -66,7 +66,7 @@ Quota (285/300)       ███████████████████�
 ## Configuration
 
 The tool stores configuration and account data in:
-`~/.config/gemini-quota/accounts.json`
+`~/.config/limitwatch/accounts.json`
 
 ## Development
 

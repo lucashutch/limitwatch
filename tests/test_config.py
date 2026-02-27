@@ -1,5 +1,5 @@
 import json
-from gemini_quota.config import Config
+from limitwatch.config import Config
 
 
 def test_config_load_empty(tmp_path):
@@ -32,4 +32,4 @@ def test_config_load_invalid_json(tmp_path):
 
 def test_config_default_paths():
     config = Config()
-    assert ".config/gemini-quota" in str(config.config_dir)
+    assert ".config/limitwatch" in str(config.config_dir)

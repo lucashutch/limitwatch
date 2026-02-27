@@ -1,4 +1,4 @@
-# Gemini Quota Roadmap
+# LimitWatch Roadmap
 
 ### New Providers
 - OpenAI (Usage and credits)

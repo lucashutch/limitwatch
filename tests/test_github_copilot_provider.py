@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, Mock, MagicMock
-from gemini_quota.providers.github_copilot import (
+from limitwatch.providers.github_copilot import (
     GitHubCopilotProvider,
     _make_github_headers,
     _next_month_reset_iso,
@@ -10,7 +10,7 @@ from gemini_quota.providers.github_copilot import (
 )
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_login(mock_get):
     """Test GitHub Copilot provider login with token."""
     mock_get.return_value.status_code = 200
@@ -25,7 +25,7 @@ def test_github_copilot_provider_login(mock_get):
     assert "GITHUB_COPILOT" in account_data["services"]
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_login_with_org(mock_get):
     """Test GitHub Copilot provider login with organization."""
     mock_get.return_value.status_code = 200
@@ -37,7 +37,7 @@ def test_github_copilot_provider_login_with_org(mock_get):
     assert account_data["organization"] == "myorg"
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_login_failure(mock_get):
     """Test GitHub Copilot provider login failure."""
     mock_get.return_value.status_code = 401
@@ -54,7 +54,7 @@ def test_github_copilot_provider_login_no_token():
         provider.login()
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_personal_quota(mock_get):
     """Test fetching personal Copilot quota from user endpoint."""
     account_data = {
@@ -82,7 +82,7 @@ def test_github_copilot_provider_fetch_personal_quota(mock_get):
     assert personal_quotas[0]["remaining_pct"] == 99.0
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_org_quota(mock_get):
     """Test fetching org Copilot quota."""
     account_data = {
@@ -122,7 +122,7 @@ def test_github_copilot_provider_fetch_org_quota(mock_get):
     assert org_quota["limit"] == 10
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_org_quota_error(mock_get):
     """Test org quota fetch error handling."""
     account_data = {
@@ -189,7 +189,7 @@ def test_github_copilot_provider_sort_key():
     assert personal_key[1] < org_key[1]
 
 
-@patch("gemini_quota.providers.github_copilot.subprocess.run")
+@patch("limitwatch.providers.github_copilot.subprocess.run")
 def test_github_copilot_provider_get_gh_token(mock_run):
     """Test retrieving token from gh CLI."""
     mock_run.return_value.returncode = 0
@@ -204,7 +204,7 @@ def test_github_copilot_provider_get_gh_token(mock_run):
     )
 
 
-@patch("gemini_quota.providers.github_copilot.subprocess.run")
+@patch("limitwatch.providers.github_copilot.subprocess.run")
 def test_github_copilot_provider_get_gh_token_failure(mock_run):
     """Test gh token retrieval when gh is not installed."""
     mock_run.side_effect = FileNotFoundError()
@@ -215,7 +215,7 @@ def test_github_copilot_provider_get_gh_token_failure(mock_run):
     assert token is None
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_org_404_error(mock_get):
     """Test org quota fetch 404 error (Copilot not enabled)."""
     account_data = {
@@ -246,7 +246,7 @@ def test_github_copilot_provider_fetch_org_404_error(mock_get):
     assert "not found or disabled" in error_quotas[0].get("message", "").lower()
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_org_404_uses_fallback_if_available(mock_get):
     """On 404 org billing, fallback endpoints should still be able to return org quota."""
     account_data = {
@@ -304,7 +304,7 @@ def test_github_copilot_provider_fetch_org_404_uses_fallback_if_available(mock_g
     assert quota["display_name"] == "myorg"
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_discover_orgs(mock_get):
     """Test organization auto-discovery."""
     mock_get.return_value.status_code = 200
@@ -325,7 +325,7 @@ def test_github_copilot_provider_discover_orgs(mock_get):
     assert orgs == sorted(orgs)
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_discover_orgs_empty(mock_get):
     """Test organization discovery with no orgs."""
     mock_get.return_value.status_code = 200
@@ -337,7 +337,7 @@ def test_github_copilot_provider_discover_orgs_empty(mock_get):
     assert len(orgs) == 0
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_discover_orgs_failure(mock_get):
     """Test organization discovery failure."""
     mock_get.return_value.status_code = 401
@@ -348,7 +348,7 @@ def test_github_copilot_provider_discover_orgs_failure(mock_get):
     assert len(orgs) == 0
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_personal_via_user_endpoint(mock_get):
     """Test personal quota via user endpoint."""
     headers = {"Authorization": "Bearer fake-token"}
@@ -370,7 +370,7 @@ def test_github_copilot_provider_fetch_personal_via_user_endpoint(mock_get):
     assert quota["used_pct"] == 2.0
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_personal_via_copilot_internal(mock_get):
     """Test personal quota via copilot_internal user endpoint (individual plan)."""
     headers = {"Authorization": "Bearer fake-token"}
@@ -400,8 +400,8 @@ def test_github_copilot_provider_fetch_personal_via_copilot_internal(mock_get):
     assert quota["reset"] == "2026-03-01T00:00:00Z"
 
 
-@patch("gemini_quota.providers.github_copilot.subprocess.run")
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.subprocess.run")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_personal_not_shown_for_business_plan(
     mock_get, mock_subprocess
 ):
@@ -437,8 +437,8 @@ def test_github_copilot_provider_personal_not_shown_for_business_plan(
     assert quota is None
 
 
-@patch("gemini_quota.providers.github_copilot.subprocess.run")
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.subprocess.run")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_personal_not_shown_when_plan_unknown_org_present(
     mock_get, mock_subprocess
 ):
@@ -470,7 +470,7 @@ def test_github_copilot_provider_personal_not_shown_when_plan_unknown_org_presen
     assert quota is None
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_personal_free_plan_shows_tier_label(mock_get):
     """Free plan: show 'Personal' label with zero usage."""
     headers = {"Authorization": "Bearer fake-token"}
@@ -497,8 +497,8 @@ def test_github_copilot_provider_personal_free_plan_shows_tier_label(mock_get):
     assert quota["remaining_pct"] == 100.0
 
 
-@patch("gemini_quota.providers.github_copilot.subprocess.run")
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.subprocess.run")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_personal_fallback_to_none(
     mock_get, mock_subprocess
 ):
@@ -515,7 +515,7 @@ def test_github_copilot_provider_fetch_personal_fallback_to_none(
     assert quota is None
 
 
-@patch("gemini_quota.providers.github_copilot.subprocess.run")
+@patch("limitwatch.providers.github_copilot.subprocess.run")
 def test_github_copilot_provider_get_usage_via_gh(mock_run):
     """Test fetching usage via gh CLI."""
     mock_run.return_value.returncode = 0
@@ -528,7 +528,7 @@ def test_github_copilot_provider_get_usage_via_gh(mock_run):
     assert usage["usage_percentage"] == 5.0
 
 
-@patch("gemini_quota.providers.github_copilot.subprocess.run")
+@patch("limitwatch.providers.github_copilot.subprocess.run")
 def test_github_copilot_provider_get_usage_via_gh_failure(mock_run):
     """Test gh CLI usage fetch when gh is not available."""
     mock_run.side_effect = FileNotFoundError()
@@ -539,7 +539,7 @@ def test_github_copilot_provider_get_usage_via_gh_failure(mock_run):
     assert usage is None
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_member_copilot_quota(mock_get):
     """Test member-level Copilot quota fetch."""
     headers = {"Authorization": "Bearer fake-token"}
@@ -570,7 +570,7 @@ def test_github_copilot_provider_fetch_member_copilot_quota(mock_get):
     assert quota["remaining_pct"] == 100.0
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_member_quota_user_lookup_fails(mock_get):
     """Test member quota when user lookup fails."""
     headers = {"Authorization": "Bearer fake-token"}
@@ -583,7 +583,7 @@ def test_github_copilot_provider_fetch_member_quota_user_lookup_fails(mock_get):
     assert quota is None
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_org_success(mock_get):
     """Test organization quota fetch success."""
     headers = {"Authorization": "Bearer fake-token"}
@@ -609,7 +609,7 @@ def test_github_copilot_provider_fetch_org_success(mock_get):
     )  # Account for floating point precision
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_org_403_error(mock_get):
     """Test organization quota fetch 403 (permission denied)."""
     headers = {"Authorization": "Bearer fake-token"}
@@ -624,7 +624,7 @@ def test_github_copilot_provider_fetch_org_403_error(mock_get):
     assert "Insufficient permissions" in quota["message"]
 
 
-@patch("gemini_quota.providers.github_copilot.requests.get")
+@patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_org_fallback_to_internal_org(mock_get):
     """Test org fallback to copilot_internal org list when billing/member fail."""
     headers = {"Authorization": "Bearer fake-token"}
@@ -731,7 +731,7 @@ class TestBuildPersonalQuota:
 
 class TestInteractiveLogin:
     @patch("click.prompt")
-    @patch("gemini_quota.providers.github_copilot.requests.get")
+    @patch("limitwatch.providers.github_copilot.requests.get")
     def test_interactive_login_with_gh_token(self, mock_get, mock_prompt):
         """Test interactive login when gh CLI token is found."""
         provider = GitHubCopilotProvider({})
@@ -752,7 +752,7 @@ class TestInteractiveLogin:
                 assert result["githubToken"] == "gh-token"
 
     @patch("click.prompt")
-    @patch("gemini_quota.providers.github_copilot.requests.get")
+    @patch("limitwatch.providers.github_copilot.requests.get")
     def test_interactive_login_no_gh_token_manual(self, mock_get, mock_prompt):
         """Test interactive login when user enters token manually."""
         provider = GitHubCopilotProvider({})
@@ -768,7 +768,7 @@ class TestInteractiveLogin:
                 assert result["githubToken"] == "manual-token"
 
     @patch("click.prompt")
-    @patch("gemini_quota.providers.github_copilot.requests.get")
+    @patch("limitwatch.providers.github_copilot.requests.get")
     def test_interactive_login_with_orgs(self, mock_get, mock_prompt):
         """Test interactive login with org selection."""
         provider = GitHubCopilotProvider({})
@@ -786,7 +786,7 @@ class TestInteractiveLogin:
                 assert result["organization"] == "org-a"
 
     @patch("click.prompt")
-    @patch("gemini_quota.providers.github_copilot.requests.get")
+    @patch("limitwatch.providers.github_copilot.requests.get")
     def test_interactive_login_skip_org(self, mock_get, mock_prompt):
         """Test interactive login skipping org."""
         provider = GitHubCopilotProvider({})
@@ -861,7 +861,7 @@ class TestSelectOrgFromList:
 
 
 class TestValidateToken:
-    @patch("gemini_quota.providers.github_copilot.requests.get")
+    @patch("limitwatch.providers.github_copilot.requests.get")
     def test_validate_token_exception(self, mock_get):
         mock_get.side_effect = Exception("Network error")
         with pytest.raises(Exception, match="GitHub authentication failed"):
@@ -873,7 +873,7 @@ class TestFetchQuotasEdgeCases:
         provider = GitHubCopilotProvider({})
         assert provider.fetch_quotas() == []
 
-    @patch("gemini_quota.providers.github_copilot.requests.get")
+    @patch("limitwatch.providers.github_copilot.requests.get")
     def test_no_personal_no_org_fallback(self, mock_get):
         """No personal quota found, no org → use default personal."""
         provider = GitHubCopilotProvider({"githubToken": "tok"})
@@ -886,7 +886,7 @@ class TestFetchQuotasEdgeCases:
 
 
 class TestTryPersonalViaBilling:
-    @patch("gemini_quota.providers.github_copilot.requests.get")
+    @patch("limitwatch.providers.github_copilot.requests.get")
     def test_success(self, mock_get):
         provider = GitHubCopilotProvider({})
         mock_get.return_value.status_code = 200
@@ -899,7 +899,7 @@ class TestTryPersonalViaBilling:
         assert result["remaining_pct"] == 75.0
         assert result["used_pct"] == 25.0
 
-    @patch("gemini_quota.providers.github_copilot.requests.get")
+    @patch("limitwatch.providers.github_copilot.requests.get")
     def test_exception(self, mock_get):
         provider = GitHubCopilotProvider({})
         mock_get.side_effect = Exception("timeout")
@@ -934,7 +934,7 @@ class TestTryPersonalViaGhCli:
 
 
 class TestFetchOrgCopilotQuota:
-    @patch("gemini_quota.providers.github_copilot.requests.get")
+    @patch("limitwatch.providers.github_copilot.requests.get")
     def test_other_error_code(self, mock_get):
         """Test non-200/403/404 HTTP response."""
         provider = GitHubCopilotProvider({"githubToken": "tok"})
@@ -944,7 +944,7 @@ class TestFetchOrgCopilotQuota:
         assert result["is_error"] is True
         assert "HTTP 500" in result["message"]
 
-    @patch("gemini_quota.providers.github_copilot.requests.get")
+    @patch("limitwatch.providers.github_copilot.requests.get")
     def test_exception(self, mock_get):
         """Test exception during org fetch."""
         provider = GitHubCopilotProvider({"githubToken": "tok"})
@@ -956,7 +956,7 @@ class TestFetchOrgCopilotQuota:
 
 
 class TestFetchCopilotInternalUser:
-    @patch("gemini_quota.providers.github_copilot.requests.get")
+    @patch("limitwatch.providers.github_copilot.requests.get")
     def test_no_token(self, mock_get):
         provider = GitHubCopilotProvider({})
         headers = _make_github_headers("tok")
@@ -965,7 +965,7 @@ class TestFetchCopilotInternalUser:
 
 
 class TestFetchOrgFromInternalUser:
-    @patch("gemini_quota.providers.github_copilot.requests.get")
+    @patch("limitwatch.providers.github_copilot.requests.get")
     def test_org_not_in_list(self, mock_get):
         provider = GitHubCopilotProvider({"githubToken": "tok"})
         mock_get.return_value.status_code = 200
@@ -977,7 +977,7 @@ class TestFetchOrgFromInternalUser:
         result = provider._fetch_org_from_copilot_internal_user(headers, "myorg")
         assert result is None
 
-    @patch("gemini_quota.providers.github_copilot.requests.get")
+    @patch("limitwatch.providers.github_copilot.requests.get")
     def test_no_percent_remaining(self, mock_get):
         """Org in list but no percent_remaining → defaults."""
         provider = GitHubCopilotProvider({"githubToken": "tok"})
@@ -994,7 +994,7 @@ class TestFetchOrgFromInternalUser:
 
 
 class TestTryGhInternalUsage:
-    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    @patch("limitwatch.providers.github_copilot.subprocess.run")
     def test_free_plan(self, mock_run):
         provider = GitHubCopilotProvider({})
         mock_run.return_value.returncode = 0
@@ -1002,7 +1002,7 @@ class TestTryGhInternalUsage:
         result = provider._try_gh_internal_usage()
         assert result == {"usage_percentage": 0.0}
 
-    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    @patch("limitwatch.providers.github_copilot.subprocess.run")
     def test_non_personal_plan(self, mock_run):
         provider = GitHubCopilotProvider({})
         mock_run.return_value.returncode = 0
@@ -1010,7 +1010,7 @@ class TestTryGhInternalUsage:
         result = provider._try_gh_internal_usage()
         assert result is None
 
-    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    @patch("limitwatch.providers.github_copilot.subprocess.run")
     def test_no_percent_remaining(self, mock_run):
         provider = GitHubCopilotProvider({})
         mock_run.return_value.returncode = 0
@@ -1018,7 +1018,7 @@ class TestTryGhInternalUsage:
         result = provider._try_gh_internal_usage()
         assert result is None
 
-    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    @patch("limitwatch.providers.github_copilot.subprocess.run")
     def test_returncode_nonzero(self, mock_run):
         provider = GitHubCopilotProvider({})
         mock_run.return_value.returncode = 1
@@ -1026,7 +1026,7 @@ class TestTryGhInternalUsage:
         result = provider._try_gh_internal_usage()
         assert result is None
 
-    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    @patch("limitwatch.providers.github_copilot.subprocess.run")
     def test_exception(self, mock_run):
         provider = GitHubCopilotProvider({})
         mock_run.side_effect = FileNotFoundError()
@@ -1035,7 +1035,7 @@ class TestTryGhInternalUsage:
 
 
 class TestTryGhBillingUsage:
-    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    @patch("limitwatch.providers.github_copilot.subprocess.run")
     def test_success(self, mock_run):
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = (
@@ -1045,14 +1045,14 @@ class TestTryGhBillingUsage:
         assert result is not None
         assert result["usage_percentage"] == 30.0
 
-    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    @patch("limitwatch.providers.github_copilot.subprocess.run")
     def test_returncode_nonzero(self, mock_run):
         mock_run.return_value.returncode = 1
         mock_run.return_value.stdout = ""
         result = GitHubCopilotProvider._try_gh_billing_usage()
         assert result is None
 
-    @patch("gemini_quota.providers.github_copilot.subprocess.run")
+    @patch("limitwatch.providers.github_copilot.subprocess.run")
     def test_exception(self, mock_run):
         mock_run.side_effect = FileNotFoundError()
         result = GitHubCopilotProvider._try_gh_billing_usage()
