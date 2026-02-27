@@ -201,3 +201,49 @@ class HistoryManager:
         if not dt:
             raise ValueError(f"Invalid date format: {before}")
         return self.storage.purge_old_data(dt)
+
+    def get_weekly_activity(
+        self,
+        account_email: Optional[str] = None,
+        provider_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get weekly activity data (last 7 days) with all metrics.
+
+        Returns:
+            Dict with:
+            - daily_per_account: list of daily stats per account
+            - daily_totals: list of daily totals
+            - accounts: list of unique accounts
+            - days: list of day labels (Mon, Tue, etc.)
+            - date_range: (start_date, end_date)
+        """
+        start_time = datetime.now(timezone.utc) - timedelta(days=7)
+
+        daily_per_account = self.storage.get_daily_activity(
+            since=start_time,
+            account_email=account_email,
+            provider_type=provider_type,
+        )
+
+        daily_totals = self.storage.get_credit_consumption(since=start_time)
+
+        accounts = list(set(d["account_email"] for d in daily_per_account))
+
+        days_map = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        all_dates = sorted(set(d["date"] for d in daily_per_account))
+        day_labels = []
+        for d in all_dates:
+            dt = datetime.fromisoformat(d)
+            day_labels.append(f"{days_map[dt.weekday()]} {dt.day}")
+
+        return {
+            "daily_per_account": daily_per_account,
+            "daily_totals": daily_totals,
+            "accounts": sorted(accounts),
+            "days": day_labels,
+            "dates": all_dates,
+            "date_range": (
+                all_dates[0] if all_dates else None,
+                all_dates[-1] if all_dates else None,
+            ),
+        }

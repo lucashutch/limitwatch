@@ -582,9 +582,27 @@ def show(
     "--table", is_flag=True, help="Show time-series table instead of sparklines"
 )
 @click.option("--summary", is_flag=True, help="Show database summary instead of data")
+@click.option(
+    "--heatmap",
+    "view_type",
+    flag_value="heatmap",
+    help="Show activity heatmap (days × accounts)",
+)
+@click.option(
+    "--chart",
+    "view_type",
+    flag_value="chart",
+    help="Show ASCII line chart of quota remaining %",
+)
+@click.option(
+    "--calendar", "view_type", flag_value="calendar", help="Show weekly calendar view"
+)
+@click.option(
+    "--bars", "view_type", flag_value="bars", help="Show daily credit consumption bars"
+)
 @click.option("--verbose", is_flag=True, help="Enable verbose logging")
 def history_command(
-    preset, since, until, account, provider, quota, table, summary, verbose
+    preset, since, until, account, provider, quota, table, summary, view_type, verbose
 ):
     """View historical quota data."""
     log_level = logging.DEBUG if verbose else logging.WARNING
@@ -597,6 +615,26 @@ def history_command(
     if summary:
         info = history_mgr.get_database_info()
         display.print_history_summary(info)
+        return
+
+    if view_type in ("heatmap", "chart", "calendar", "bars"):
+        try:
+            weekly_data = history_mgr.get_weekly_activity(
+                account_email=account,
+                provider_type=provider,
+            )
+
+            if view_type == "heatmap":
+                display.render_activity_heatmap(weekly_data)
+            elif view_type == "chart":
+                display.render_ascii_chart(weekly_data)
+            elif view_type == "calendar":
+                display.render_calendar_view(weekly_data)
+            elif view_type == "bars":
+                display.render_daily_bars(weekly_data)
+
+        except Exception as e:
+            display.console.print(f"[red]Error:[/red] {e}")
         return
 
     # Default to 24h if no time range specified
