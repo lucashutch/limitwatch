@@ -239,10 +239,10 @@ def _render_account_quotas(
     if not filtered_quotas and query:
         return False
 
-    if not compact:
-        display.print_account_header(
-            email, provider=provider_name, alias=alias, group=group_val
-        )
+    # Show account header for both compact and non-compact modes
+    display.print_account_header(
+        email, provider=provider_name, alias=alias, group=group_val
+    )
 
     display.draw_quota_bars(
         quotas,
