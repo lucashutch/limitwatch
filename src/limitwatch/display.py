@@ -465,6 +465,246 @@ class DisplayManager:
         self.console.print(table)
         self.console.print()
 
+    def render_activity_heatmap(self, weekly_data):
+        """Render weekly activity as a heatmap (days × accounts)."""
+        if not weekly_data.get("daily_per_account"):
+            self.console.print(
+                "[yellow]No activity data found for the past week.[/yellow]"
+            )
+            return
+
+        daily_per_account = weekly_data["daily_per_account"]
+        accounts = weekly_data["accounts"]
+        dates = weekly_data["dates"]
+        day_labels = weekly_data["days"]
+
+        if not accounts or not dates:
+            self.console.print(
+                "[yellow]No activity data found for the past week.[/yellow]"
+            )
+            return
+
+        blocks = " ░▒▓█"
+
+        account_data = {}
+        for acc in accounts:
+            account_data[acc] = {d: 0 for d in dates}
+            for row in daily_per_account:
+                if row["account_email"] == acc:
+                    account_data[acc][row["date"]] = row["record_count"]
+
+        max_records = max((row["record_count"] for row in daily_per_account), default=1)
+
+        header = "Account".ljust(20) + "  " + "  ".join(d.ljust(2) for d in day_labels)
+        separator = "-" * (23 + len(day_labels) * 3)
+
+        self.console.print("\n[bold blue]Activity Heatmap (Last 7 Days)[/bold blue]")
+        self.console.print(
+            "[dim]Intensity = number of quota snapshots recorded[/dim]\n"
+        )
+        self.console.print(header)
+        self.console.print(separator)
+
+        for acc in accounts:
+            short_name = acc.split("@")[0] if "@" in acc else acc[:18]
+            row_str = short_name.ljust(20) + "  "
+            for date in dates:
+                count = account_data[acc].get(date, 0)
+                if count == 0:
+                    idx = 0
+                else:
+                    idx = min(int((count / max_records) * 4), 4)
+                row_str += blocks[idx] + "  "
+            self.console.print(row_str)
+
+        self.console.print(
+            f"\n[dim]Legend: {blocks[0]} = none  {blocks[1]} = low  {blocks[2]} = medium  {blocks[3]} = high  {blocks[4]} = very high[/dim]"
+        )
+
+    def render_ascii_chart(self, weekly_data):
+        """Render weekly data as ASCII line chart showing remaining % over time."""
+        if not weekly_data.get("daily_per_account"):
+            self.console.print(
+                "[yellow]No activity data found for the past week.[/yellow]"
+            )
+            return
+
+        daily_per_account = weekly_data["daily_per_account"]
+        accounts = weekly_data["accounts"]
+        dates = weekly_data["dates"]
+        day_labels = weekly_data["days"]
+
+        if not accounts or not dates:
+            self.console.print(
+                "[yellow]No activity data found for the past week.[/yellow]"
+            )
+            return
+
+        self.console.print("\n[bold blue]Quota Remaining % (Last 7 Days)[/bold blue]")
+        self.console.print("[dim]Average remaining % per account per day[/dim]\n")
+
+        account_avgs = {}
+        for acc in accounts:
+            account_avgs[acc] = {}
+            for date in dates:
+                account_avgs[acc][date] = None
+
+            for row in daily_per_account:
+                if row["account_email"] == acc and row.get("avg_remaining_pct"):
+                    account_avgs[acc][row["date"]] = row["avg_remaining_pct"]
+
+        for acc in accounts:
+            short_name = acc.split("@")[0] if "@" in acc else acc[:18]
+            self.console.print(f"[cyan]{short_name}[/cyan]:")
+
+            values = [account_avgs[acc].get(d) for d in dates]
+            valid_values = [v for v in values if v is not None]
+
+            if not valid_values:
+                self.console.print("  [dim]No data[/dim]")
+                continue
+
+            chart = self._generate_line_chart(values, day_labels)
+            self.console.print(chart)
+            self.console.print()
+
+    def _generate_line_chart(self, values, labels):
+        """Generate an ASCII line chart from values."""
+        if not values:
+            return ""
+
+        chart_lines = []
+        chart_width = len(labels) * 4
+
+        for pct in [100, 80, 60, 40, 20, 0]:
+            line = f"{pct:3}% │"
+
+            for i, val in enumerate(values):
+                if val is None:
+                    line += "   ·"
+                elif val >= pct:
+                    if i > 0 and values[i - 1] is not None and values[i - 1] >= pct:
+                        line += "───"
+                    else:
+                        line += "·──"
+                else:
+                    line += "   "
+
+            chart_lines.append(line)
+
+        chart_str = "\n".join(chart_lines)
+        chart_str += "\n    " + "┼" + "─" * (chart_width - 1)
+
+        x_labels = ""
+        for label in labels:
+            x_labels += f"  {label[:2]} "
+        chart_str += "\n    " + x_labels
+
+        return chart_str
+
+    def render_calendar_view(self, weekly_data):
+        """Render weekly activity as a calendar-style view."""
+        if not weekly_data.get("daily_per_account"):
+            self.console.print(
+                "[yellow]No activity data found for the past week.[/yellow]"
+            )
+            return
+
+        daily_per_account = weekly_data["daily_per_account"]
+        dates = weekly_data["dates"]
+        day_labels = weekly_data["days"]
+        daily_totals = weekly_data["daily_totals"]
+
+        if not dates:
+            self.console.print(
+                "[yellow]No activity data found for the past week.[/yellow]"
+            )
+            return
+
+        self.console.print("\n[bold blue]Weekly Activity Calendar[/bold blue]\n")
+
+        totals_map = {d["date"]: d for d in daily_totals}
+
+        blocks = " ░▒▓█"
+
+        for date, label in zip(dates, day_labels):
+            total = totals_map.get(date, {})
+            record_count = total.get("record_count", 0)
+            total_used = total.get("total_used", 0)
+            account_count = total.get("account_count", 0)
+
+            if record_count == 0:
+                intensity = 0
+            elif record_count <= 2:
+                intensity = 1
+            elif record_count <= 5:
+                intensity = 2
+            elif record_count <= 10:
+                intensity = 3
+            else:
+                intensity = 4
+
+            self.console.print(f"┌──────────┐")
+            self.console.print(
+                f"│ {label:^8} │  [bold]{blocks[intensity] * 4}[/bold] {record_count} snapshots"
+            )
+            self.console.print(
+                f"│ {date[5:]}   │  [cyan]{account_count}[/cyan] accounts active"
+            )
+            if total_used > 0:
+                self.console.print(
+                    f"│          │  [yellow]{total_used:.0f}[/yellow] credits used"
+                )
+            else:
+                self.console.print(f"│          │")
+            self.console.print(f"└──────────┘")
+
+    def render_daily_bars(self, weekly_data):
+        """Render daily credit consumption as horizontal bar chart."""
+        if not weekly_data.get("daily_totals"):
+            self.console.print(
+                "[yellow]No consumption data found for the past week.[/yellow]"
+            )
+            return
+
+        daily_totals = weekly_data["daily_totals"]
+        day_labels = weekly_data["days"]
+
+        if not daily_totals:
+            self.console.print(
+                "[yellow]No consumption data found for the past week.[/yellow]"
+            )
+            return
+
+        self.console.print(
+            "\n[bold blue]Daily Credit Consumption (Last 7 Days)[/bold blue]\n"
+        )
+
+        max_used = max((d.get("total_used", 0) or 0 for d in daily_totals), default=1)
+        bar_width = 30
+
+        for i, total in enumerate(daily_totals):
+            date = total.get("date", "")
+            label = day_labels[i] if i < len(day_labels) else date[5:]
+            used = total.get("total_used", 0) or 0
+            account_count = total.get("account_count", 0)
+
+            if max_used > 0:
+                filled = int((used / max_used) * bar_width)
+                bar = "█" * filled + "░" * (bar_width - filled)
+            else:
+                bar = "░" * bar_width
+
+            if used > 0:
+                pct = (used / max_used) * 100 if max_used > 0 else 0
+                self.console.print(
+                    f"{label:8} [green]{bar}[/green]  [yellow]{used:.0f}[/yellow] credits ({account_count} acct)"
+                )
+            else:
+                self.console.print(
+                    f"{label:8} [dim]{bar}[/dim]  [dim]no activity[/dim]"
+                )
+
 
 # --- Pure helper functions (no self, easily testable) ---
 

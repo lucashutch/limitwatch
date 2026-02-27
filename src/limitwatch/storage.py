@@ -280,3 +280,99 @@ class Storage:
             deleted = cursor.rowcount
             logger.info(f"Purged {deleted} old quota records")
             return deleted
+
+    def get_daily_activity(
+        self,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+        account_email: Optional[str] = None,
+        provider_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get aggregated daily activity data.
+
+        Returns:
+            List of dicts with daily stats per account:
+            - date: YYYY-MM-DD
+            - account_email
+            - provider_type
+            - record_count: number of snapshots
+            - avg_remaining_pct, min_remaining_pct, max_remaining_pct
+            - total_used: sum of used credits
+            - consumption: difference between first and last remaining%
+        """
+        query = """
+            SELECT 
+                date(timestamp) as date,
+                account_email,
+                provider_type,
+                COUNT(*) as record_count,
+                AVG(remaining_pct) as avg_remaining_pct,
+                MIN(remaining_pct) as min_remaining_pct,
+                MAX(remaining_pct) as max_remaining_pct,
+                SUM(used) as total_used,
+                MIN(timestamp) as first_record,
+                MAX(timestamp) as last_record
+            FROM quota_snapshots
+            WHERE remaining_pct IS NOT NULL
+        """
+        params = []
+
+        if since:
+            query += " AND timestamp >= ?"
+            params.append(since.isoformat())
+        if until:
+            query += " AND timestamp <= ?"
+            params.append(until.isoformat())
+        if account_email:
+            query += " AND account_email = ?"
+            params.append(account_email)
+        if provider_type:
+            query += " AND provider_type = ?"
+            params.append(provider_type)
+
+        query += " GROUP BY date(timestamp), account_email, provider_type"
+        query += " ORDER BY date, account_email"
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_credit_consumption(
+        self,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get credit consumption per day across all accounts.
+
+        Returns:
+            List of dicts with daily totals:
+            - date: YYYY-MM-DD
+            - total_used: sum of all used credits that day
+            - account_count: number of unique accounts active
+            - provider_count: number of unique providers active
+        """
+        query = """
+            SELECT 
+                date(timestamp) as date,
+                SUM(used) as total_used,
+                COUNT(DISTINCT account_email) as account_count,
+                COUNT(DISTINCT provider_type) as provider_count,
+                COUNT(*) as record_count
+            FROM quota_snapshots
+            WHERE used IS NOT NULL
+        """
+        params = []
+
+        if since:
+            query += " AND timestamp >= ?"
+            params.append(since.isoformat())
+        if until:
+            query += " AND timestamp <= ?"
+            params.append(until.isoformat())
+
+        query += " GROUP BY date(timestamp)"
+        query += " ORDER BY date DESC"
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
