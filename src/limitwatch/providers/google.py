@@ -79,7 +79,7 @@ LOAD_CODE_ASSIST_ENDPOINTS = [
     "https://autopush-cloudcode-pa.sandbox.googleapis.com",
 ]
 
-DEFAULT_QUOTA_TIMEOUT = 3
+DEFAULT_QUOTA_TIMEOUT = 2.0
 
 
 def classify_cli_model(model_id: str) -> Optional[str]:
@@ -459,6 +459,7 @@ class GoogleProvider(BaseProvider):
             f"[google] fetch_quotas done account={email} elapsed_ms={elapsed_ms:.1f} "
             f"quota_count={len(quotas)}"
         )
+        self.record_timing("google_total", elapsed_ms)
         return quotas
 
     def _fetch_services_parallel(self, services, project_id) -> List[Dict[str, Any]]:
@@ -481,14 +482,8 @@ class GoogleProvider(BaseProvider):
             futures = {name: executor.submit(fn) for name, fn in fetchers.items()}
             for name, future in futures.items():
                 try:
-                    service_start = time.perf_counter()
                     service_quotas = future.result()
                     quotas.extend(service_quotas)
-                    service_elapsed_ms = (time.perf_counter() - service_start) * 1000
-                    logger.debug(
-                        f"[google] service={name} quota_count={len(service_quotas)} "
-                        f"join_elapsed_ms={service_elapsed_ms:.1f}"
-                    )
                 except Exception as e:
                     logger.debug(f"[google] service={name} failed err={e}")
 
@@ -496,6 +491,7 @@ class GoogleProvider(BaseProvider):
         logger.debug(
             f"[google] _fetch_services_parallel done elapsed_ms={elapsed_ms:.1f} total={len(quotas)}"
         )
+        self.record_timing("google_services", elapsed_ms)
         return quotas
 
     def _load_cached_quotas(self) -> List[Dict[str, Any]]:
@@ -530,8 +526,13 @@ class GoogleProvider(BaseProvider):
             "User-Agent": _get_user_agent(),
         }
 
+        if not self.has_time_remaining():
+            return []
+
         try:
             response = self._make_quota_request(url, headers, project_id)
+            if response is None:
+                return []
             if response.status_code == 200:
                 return self._parse_cli_quota_response(response.json())
             if response.status_code == 403:
@@ -545,35 +546,57 @@ class GoogleProvider(BaseProvider):
         start = time.perf_counter()
         endpoint = url.rsplit(":", 1)[-1]
         if project_id and not self._prefer_no_project:
+            timeout = self.time_remaining(DEFAULT_QUOTA_TIMEOUT)
+            if timeout <= 0:
+                return None
             response = requests.post(
                 url,
                 headers=headers,
                 json={"project": project_id},
-                timeout=DEFAULT_QUOTA_TIMEOUT,
+                timeout=timeout,
             )
             if response.status_code == 200:
                 self._prefer_no_project = False
+                self.account_data["preferNoProjectForQuota"] = False
                 elapsed_ms = (time.perf_counter() - start) * 1000
+                self.record_timing(
+                    f"google_{endpoint}_project",
+                    elapsed_ms,
+                    status=response.status_code,
+                )
                 logger.debug(
                     f"[google] endpoint={endpoint} mode=project status=200 elapsed_ms={elapsed_ms:.1f}"
                 )
                 return response
 
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            self.record_timing(
+                f"google_{endpoint}_project", elapsed_ms, status=response.status_code
+            )
             logger.debug(
                 f"Quota Error ({project_id}) [{response.status_code}]: {response.text}"
             )
 
-            self._prefer_no_project = True
+            if response.status_code in (400, 403):
+                self._prefer_no_project = True
+                self.account_data["preferNoProjectForQuota"] = True
 
+        timeout = self.time_remaining(DEFAULT_QUOTA_TIMEOUT)
+        if timeout <= 0:
+            return None
         response = requests.post(
             url,
             headers=headers,
             json={},
-            timeout=DEFAULT_QUOTA_TIMEOUT,
+            timeout=timeout,
         )
         if response.status_code == 200:
             self._prefer_no_project = True
+            self.account_data["preferNoProjectForQuota"] = True
         elapsed_ms = (time.perf_counter() - start) * 1000
+        self.record_timing(
+            f"google_{endpoint}_noproject", elapsed_ms, status=response.status_code
+        )
         logger.debug(
             f"[google] endpoint={endpoint} mode=noproject status={response.status_code} elapsed_ms={elapsed_ms:.1f}"
         )
@@ -659,8 +682,13 @@ class GoogleProvider(BaseProvider):
             "Client-Metadata": '{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}',
         }
 
+        if not self.has_time_remaining():
+            return []
+
         try:
             response = self._make_quota_request(url, headers, project_id)
+            if response is None:
+                return []
             if response.status_code == 200:
                 return self._parse_ag_quota_response(response.json())
         except Exception:
