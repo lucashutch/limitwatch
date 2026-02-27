@@ -81,7 +81,13 @@ class OpenRouterProvider(BaseProvider):
     # ------------------------------------------------------------------
 
     def login(self, **kwargs) -> Dict[str, Any]:
-        """Validate the API key against /auth/key and return account data."""
+        """Validate the API key against /auth/key and return account data.
+
+        Optional kwargs:
+          api_key (str): The OpenRouter API key.
+          name    (str): A friendly display name. If omitted, the key's label
+                         from the API is used (which may be a redacted key string).
+        """
         api_key = kwargs.get("api_key", "").strip()
         if not api_key:
             raise ValueError("API key is required for OpenRouter login")
@@ -96,11 +102,15 @@ class OpenRouterProvider(BaseProvider):
         resp.raise_for_status()
 
         data = resp.json().get("data", {})
-        label = data.get("label") or data.get("name") or "OpenRouter Key"
+        api_label = data.get("label") or data.get("name") or "OpenRouter Key"
+
+        # Prefer an explicit name kwarg; fall back to the API label.
+        custom_name = (kwargs.get("name") or "").strip()
+        identifier = custom_name if custom_name else api_label
 
         return {
             "type": "openrouter",
-            "email": label,
+            "email": identifier,
             "apiKey": api_key,
             "services": ["OPENROUTER"],
         }
@@ -109,7 +119,20 @@ class OpenRouterProvider(BaseProvider):
         import click
 
         api_key = click.prompt("Enter OpenRouter API key", hide_input=True)
-        return self.login(api_key=api_key)
+        account = self.login(api_key=api_key)
+
+        # If OpenRouter returned a redacted key as the label (e.g. "sk-or-v1-abc...xyz"),
+        # the user never set a name for this key on the dashboard. Offer to set one now.
+        current_label = account["email"]
+        if "..." in current_label:
+            friendly = click.prompt(
+                f"Key validated ({current_label}). Enter a friendly name for this account",
+                default=current_label,
+            ).strip()
+            if friendly and friendly != current_label:
+                account["email"] = friendly
+
+        return account
 
     # ------------------------------------------------------------------
     # Quota fetching

@@ -1,7 +1,6 @@
 # LimitWatch Roadmap
 
 ### New Providers
-- Openrouter ✅ (API key login, credits remaining balance)
 - Anthropic (Rate limits and usage)
 - Mistral AI
 - Minimax Subscription
