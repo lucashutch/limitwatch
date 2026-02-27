@@ -47,6 +47,186 @@ class DisplayManager:
             self._print_empty_message(quotas, show_all)
             return
 
+        self._render_history_sparklines(history_data)
+
+    def _render_history_sparklines(self, history_data):
+        """Render history data as sparklines (one per quota)."""
+        from rich.table import Table
+        from rich.text import Text
+
+        if not history_data:
+            self.console.print("[yellow]No historical data found.[/yellow]")
+            return
+
+        table = Table(
+            title="Quota History (Sparklines)",
+            show_header=True,
+            header_style="bold blue",
+        )
+        table.add_column("Account", style="cyan")
+        table.add_column("Provider", style="magenta")
+        table.add_column("Quota", style="green")
+        table.add_column("Trend (24h)", style="white", min_width=30)
+        table.add_column("Latest", style="yellow", justify="right")
+        table.add_column("Range", style="dim", justify="right")
+
+        # Group by account/quota and create sparklines
+        grouped = {}
+        for record in history_data:
+            key = (
+                record["account_email"],
+                record["provider_type"],
+                record["quota_name"],
+            )
+            if key not in grouped:
+                grouped[key] = {
+                    "display_name": record.get("display_name") or record["quota_name"],
+                    "values": [],
+                }
+            if record.get("remaining_pct") is not None:
+                grouped[key]["values"].append(record["remaining_pct"])
+
+        for (email, provider, quota_name), data in sorted(grouped.items()):
+            values = data["values"]
+            if not values:
+                continue
+
+            display_name = data["display_name"]
+            sparkline = self._generate_sparkline(values)
+            latest = f"{values[-1]:.1f}%"
+            range_str = f"{min(values):.0f}-{max(values):.0f}%"
+
+            table.add_row(
+                email.split("@")[0] if "@" in email else email,
+                provider,
+                display_name,
+                sparkline,
+                latest,
+                range_str,
+            )
+
+        self.console.print(table)
+
+    def _generate_sparkline(self, values, width=20):
+        """Generate a simple sparkline string from values."""
+        if not values or len(values) < 2:
+            return "─" * width
+
+        blocks = " ▁▂▃▄▅▆▇█"
+        min_val = min(values)
+        max_val = max(values)
+        range_val = max_val - min_val if max_val != min_val else 1
+
+        # Sample or interpolate to fit width
+        if len(values) <= width:
+            # Repeat values to fill width
+            step = len(values) / width
+            sampled = [values[int(i * step)] for i in range(width)]
+        else:
+            # Sample evenly
+            step = len(values) / width
+            sampled = [values[int(i * step)] for i in range(width)]
+
+        sparkline = ""
+        for val in sampled:
+            normalized = (val - min_val) / range_val
+            idx = int(normalized * (len(blocks) - 1))
+            sparkline += blocks[idx]
+
+        return sparkline
+
+    def render_history_table(self, history_data):
+        """Render history data as a time-series table."""
+        from rich.table import Table
+        from datetime import datetime
+
+        if not history_data:
+            self.console.print("[yellow]No historical data found.[/yellow]")
+            return
+
+        table = Table(
+            title="Quota History (Time Series)",
+            show_header=True,
+            header_style="bold blue",
+        )
+        table.add_column("Time", style="dim", min_width=20)
+        table.add_column("Account", style="cyan")
+        table.add_column("Provider", style="magenta")
+        table.add_column("Quota", style="green")
+        table.add_column("Remaining %", style="yellow", justify="right")
+        table.add_column("Used", style="blue", justify="right")
+        table.add_column("Limit", style="dim", justify="right")
+
+        for record in history_data[:100]:  # Limit to 100 most recent
+            timestamp = record["timestamp"]
+            if isinstance(timestamp, str):
+                try:
+                    dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                    time_str = dt.strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    time_str = timestamp[:16]  # First 16 chars
+            else:
+                time_str = str(timestamp)[:16]
+
+            remaining = (
+                f"{record['remaining_pct']:.1f}%"
+                if record.get("remaining_pct") is not None
+                else "N/A"
+            )
+            used = f"{record['used']:.0f}" if record.get("used") is not None else "N/A"
+            limit = (
+                f"{record['limit_val']:.0f}"
+                if record.get("limit_val") is not None
+                else "N/A"
+            )
+
+            display_name = record.get("display_name") or record["quota_name"]
+
+            table.add_row(
+                time_str,
+                record["account_email"].split("@")[0]
+                if "@" in record["account_email"]
+                else record["account_email"],
+                record["provider_type"],
+                display_name,
+                remaining,
+                used,
+                limit,
+            )
+
+        if len(history_data) > 100:
+            table.add_row(
+                "...",
+                f"[{len(history_data) - 100} more records]",
+                "",
+                "",
+                "",
+                "",
+                "",
+                style="dim",
+            )
+
+        self.console.print(table)
+
+    def print_history_summary(self, info):
+        """Print a summary of the history database."""
+        from rich.table import Table
+
+        self.console.print("\n[bold blue]History Database Summary[/bold blue]")
+
+        table = Table(show_header=False, box=None)
+        table.add_column("Key", style="cyan")
+        table.add_column("Value", style="white")
+
+        table.add_row("Database Path", info["path"])
+        table.add_row("Oldest Record", info["oldest_record"] or "None")
+        table.add_row("Newest Record", info["newest_record"] or "None")
+        table.add_row("Accounts Tracked", str(len(info["accounts"])))
+        table.add_row("Providers Tracked", ", ".join(info["providers"]) or "None")
+
+        self.console.print(table)
+        self.console.print()
+
         if client:
             filtered_quotas.sort(key=lambda q: client.get_sort_key(q))
 
