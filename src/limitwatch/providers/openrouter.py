@@ -183,6 +183,7 @@ class OpenRouterProvider(BaseProvider):
             return {
                 "name": "OpenRouter Credits",
                 "display_name": f"Credits: ${remaining:.2f} remaining",
+                "show_progress": False,
                 "remaining_pct": pct,
                 "remaining": remaining,
                 "limit": total,
@@ -229,6 +230,7 @@ class OpenRouterProvider(BaseProvider):
             return {
                 "name": "OpenRouter Key",
                 "display_name": display,
+                "show_progress": False,
                 "remaining_pct": pct,
                 "remaining": remaining,
                 "limit": limit,

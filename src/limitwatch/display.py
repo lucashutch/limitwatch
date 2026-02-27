@@ -109,6 +109,10 @@ class DisplayManager:
                 self.console.print(f"{prefix}[red]{name}: {message}[/red]")
                 continue
 
+            if q.get("show_progress", True) is False:
+                self.console.print(f"{prefix}{name}")
+                continue
+
             bar_color = get_bar_color(shown_pct, is_used)
             bar = render_compact_bar(shown_pct, bar_width, bar_color)
             reset_str = get_reset_string(q.get("reset") or "Unknown", remaining_pct)
@@ -132,6 +136,10 @@ class DisplayManager:
 
             if q.get("is_error"):
                 self._print_error_quota(styled_name, q)
+                continue
+
+            if q.get("show_progress", True) is False:
+                self.console.print(f"{styled_name}")
                 continue
 
             bar_color = get_bar_color(shown_pct, is_used)
