@@ -53,6 +53,8 @@ CONFIG_SCHEMA = {
         "alertThreshold": {"type": "number", "minimum": 0, "maximum": 100},
         "cacheTtl": {"type": "integer", "minimum": 0},
         "theme": {"type": "string", "enum": ["default", "dark", "light"]},
+        "historyDbPath": {"type": "string"},
+        "enableHistory": {"type": "boolean"},
     },
 }
 
@@ -97,3 +99,16 @@ class Config:
     @property
     def auth_path(self) -> Path:
         return self.config_dir / "accounts.json"
+
+    @property
+    def history_db_path(self) -> Path:
+        """Get the path to the history database."""
+        custom_path = self.data.get("historyDbPath")
+        if custom_path:
+            return Path(custom_path).expanduser()
+        return self.config_dir / "history.db"
+
+    @property
+    def history_enabled(self) -> bool:
+        """Check if history tracking is enabled."""
+        return self.data.get("enableHistory", True)
