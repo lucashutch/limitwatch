@@ -1,14 +1,14 @@
 # LimitWatch Roadmap
 
 ### New Providers
-- OpenAI (Usage and credits)
 - Anthropic (Rate limits and usage)
 - Mistral AI
 - Minimax Subscription
 - Kimi (Moonshot.ai subscription)
 - Z.AI
 - Together AI / Fireworks
-- Opencode Zen (go or black subscription or credits)
+- Opencode Zen (credits billing + active Go/Black subscription, waiting for API access)
+- Chutes: expand to support credits balance as well as subscription usage
 
 ### Unit Testing & Quality
 - Improve error handling for network timeouts.
