@@ -10,6 +10,7 @@ from .auth import AuthManager
 from .quota_client import QuotaClient
 from .display import DisplayManager
 from .history import HistoryManager
+from .export import Exporter
 
 logger = logging.getLogger(__name__)
 
@@ -619,6 +620,73 @@ def history_command(
 
     except Exception as e:
         display.console.print(f"[red]Error:[/red] {e}")
+
+
+@cli.command(name="export")
+@click.option(
+    "--format",
+    "export_format",
+    type=click.Choice(["csv", "markdown"]),
+    default="csv",
+    help="Export format (default: csv)",
+)
+@click.option("-o", "--output", help="Output file path (default: stdout)")
+@click.option(
+    "--preset",
+    type=click.Choice(["24h", "7d", "30d", "90d"]),
+    help="Time range preset",
+)
+@click.option("--since", help="Start time (ISO format or relative like '7d', '24h')")
+@click.option("--until", help="End time (ISO format)")
+@click.option("-a", "--account", help="Filter by account email")
+@click.option("-p", "--provider", help="Filter by provider type")
+@click.option("-q", "--quota", help="Filter by quota name")
+@click.option("--verbose", is_flag=True, help="Enable verbose logging")
+def export_command(
+    export_format, output, preset, since, until, account, provider, quota, verbose
+):
+    """Export historical quota data to CSV or Markdown."""
+    log_level = logging.DEBUG if verbose else logging.WARNING
+    logging.basicConfig(level=log_level, format="%(message)s", datefmt="[%X]")
+
+    config = Config()
+    exporter = Exporter(HistoryManager(config.history_db_path))
+
+    # Default to 7d if no time range specified
+    if not preset and not since:
+        preset = "7d"
+
+    try:
+        if export_format == "csv":
+            result = exporter.export_csv(
+                output_path=Path(output) if output else None,
+                preset=preset,
+                since=since,
+                until=until,
+                account_email=account,
+                provider_type=provider,
+                quota_name=quota,
+            )
+            if not output:
+                print(result)
+        elif export_format == "markdown":
+            result = exporter.export_markdown(
+                output_path=Path(output) if output else None,
+                preset=preset,
+                since=since,
+                until=until,
+                account_email=account,
+                provider_type=provider,
+                quota_name=quota,
+            )
+            if not output:
+                print(result)
+
+        if output:
+            click.echo(f"Exported to {output}")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
 
 
 # Default command is "show"
