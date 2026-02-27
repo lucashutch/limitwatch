@@ -24,8 +24,18 @@ except PackageNotFoundError:
 # --- Helper functions extracted from main() ---
 
 
-def fetch_account_data(idx, acc_data, auth_mgr, show_all):
-    """Fetch quota data for a single account. Returns (email, quotas, client, error)."""
+def fetch_account_data(
+    idx,
+    acc_data,
+    auth_mgr,
+    show_all,
+    refresh,
+    cache_ttl,
+    max_age_ms,
+    show_start,
+    deadline,
+):
+    """Fetch quota data for a single account. Returns (email, quotas, client, error, timings)."""
     email = acc_data.get("email", f"Account {idx}")
     account_type = acc_data.get("type", "google")
     start = time.perf_counter()
@@ -33,32 +43,82 @@ def fetch_account_data(idx, acc_data, auth_mgr, show_all):
         f"[cli] fetch_account_data start account={email} provider={account_type}"
     )
 
+    timings = []
+    cached_used = False
     creds = None
     if account_type == "google":
         creds = auth_mgr.get_credentials(idx)
         if not creds:
-            return email, None, None, f"Could not load credentials for {email}"
+            return email, None, None, f"Could not load credentials for {email}", timings
         try:
-            auth_mgr.refresh_credentials(creds)
+            refresh_start = time.perf_counter()
+            if refresh or creds.expired or not creds.valid:
+                auth_mgr.refresh_credentials(creds)
+                refresh_ms = (time.perf_counter() - refresh_start) * 1000
+                timings.append({"name": "google_refresh", "elapsed_ms": refresh_ms})
         except Exception as e:
-            return email, None, None, f"Token refresh failed: {e}"
+            return email, None, None, f"Token refresh failed: {e}", timings
 
+    client = None
     try:
         client = QuotaClient(acc_data, credentials=creds)
+        client.set_deadline(deadline)
+
         quotas = client.fetch_quotas()
-        elapsed_ms = (time.perf_counter() - start) * 1000
+        fresh_quotas = quotas
+        now = time.perf_counter()
+        elapsed_ms = (now - start) * 1000
+        global_elapsed_ms = (now - show_start) * 1000
         logger.debug(
             f"[cli] fetch_account_data done account={email} provider={account_type} "
             f"elapsed_ms={elapsed_ms:.1f} quota_count={len(quotas or [])}"
         )
-        return email, quotas, client, None
+        timings.extend(getattr(client.provider, "timings", []))
+
+        timeout_error = None
+        if global_elapsed_ms > max_age_ms:
+            cached = acc_data.get("cachedQuotas")
+            cached_at = acc_data.get("cachedAt")
+            if _is_cache_fresh(cached_at, cache_ttl):
+                quotas = cached
+                cached_used = True
+            else:
+                timeout_error = "Timed out (no cached data available)"
+
+        if _should_cache_quotas(fresh_quotas):
+            _update_account_cache(acc_data, fresh_quotas)
+
+        timings.append({"name": "account_total", "elapsed_ms": elapsed_ms})
+        if timeout_error:
+            timings.append(
+                {
+                    "name": "deadline_missed",
+                    "elapsed_ms": 0.0,
+                    "reason": "timeout_no_cache",
+                }
+            )
+            return email, None, client, timeout_error, timings
+        if cached_used:
+            timings.append(
+                {"name": "cache_fallback", "elapsed_ms": 0.0, "reason": "timeout_cache"}
+            )
+        return email, quotas, client, None, timings
     except Exception as e:
-        elapsed_ms = (time.perf_counter() - start) * 1000
+        now = time.perf_counter()
+        elapsed_ms = (now - start) * 1000
+        global_elapsed_ms = (now - show_start) * 1000
         logger.debug(
             f"[cli] fetch_account_data error account={email} provider={account_type} "
             f"elapsed_ms={elapsed_ms:.1f} err={e}"
         )
-        return email, None, None, str(e)
+        cached = acc_data.get("cachedQuotas")
+        cached_at = acc_data.get("cachedAt")
+        if global_elapsed_ms > max_age_ms and _is_cache_fresh(cached_at, cache_ttl):
+            timings.append(
+                {"name": "cache_fallback", "elapsed_ms": 0.0, "reason": "error_cache"}
+            )
+            return email, cached, client, None, timings
+        return email, None, client, str(e), timings
 
 
 def _output_json(data):
@@ -244,22 +304,114 @@ def _filter_accounts(accounts, account, provider, group):
     return indices
 
 
-def _fetch_all_quotas(indices_to_check, auth_mgr, show_all, display, json_output):
-    """Fetch quotas for all accounts concurrently. Returns {idx: (email, quotas, client, error)}."""
+def _is_cache_fresh(cached_at, cache_ttl):
+    if not cached_at:
+        return False
+    if cache_ttl <= 0:
+        return False
+    try:
+        cached_ts = float(cached_at)
+    except (TypeError, ValueError):
+        return False
+    return (time.time() - cached_ts) <= cache_ttl
+
+
+def _update_account_cache(acc_data, quotas):
+    acc_data["cachedQuotas"] = quotas
+    acc_data["cachedAt"] = time.time()
+
+
+def _should_cache_quotas(quotas):
+    if not quotas:
+        return False
+    for quota in quotas:
+        if not quota.get("is_error"):
+            return True
+    return False
+
+
+def _build_timeout_result(idx, acc_data, auth_mgr, cache_ttl, show_start):
+    email = acc_data.get("email", f"Account {idx}")
+    cached = acc_data.get("cachedQuotas")
+    cached_at = acc_data.get("cachedAt")
+    timings = []
+    elapsed_ms = (time.perf_counter() - show_start) * 1000
+
+    if _is_cache_fresh(cached_at, cache_ttl):
+        quotas = cached
+        error = None
+        timings.append(
+            {"name": "cache_fallback", "elapsed_ms": 0.0, "reason": "timeout_cache"}
+        )
+    else:
+        quotas = None
+        error = "Timed out (no cached data available)"
+        timings.append(
+            {"name": "deadline_missed", "elapsed_ms": 0.0, "reason": "timeout_no_cache"}
+        )
+
+    timings.append({"name": "account_total", "elapsed_ms": elapsed_ms})
+
+    creds = None
+    if acc_data.get("type") == "google":
+        creds = auth_mgr.get_credentials(idx)
+    client = QuotaClient(acc_data, credentials=creds)
+
+    return email, quotas, client, error, timings
+
+
+def _fetch_all_quotas(
+    indices_to_check,
+    auth_mgr,
+    show_all,
+    display,
+    json_output,
+    refresh,
+    cache_ttl,
+    max_age_ms,
+):
+    """Fetch quotas for all accounts concurrently. Returns {idx: (email, quotas, client, error, timings)}."""
     idx_to_result = {}
     max_workers = min(len(indices_to_check), 10)
+    show_start = time.perf_counter()
+    deadline = show_start + max_age_ms / 1000.0
+
+    acc_map = {idx: acc_data for idx, acc_data in indices_to_check}
 
     def run_executor():
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_idx = {
                 executor.submit(
-                    fetch_account_data, idx, acc_data, auth_mgr, show_all
+                    fetch_account_data,
+                    idx,
+                    acc_data,
+                    auth_mgr,
+                    show_all,
+                    refresh,
+                    cache_ttl,
+                    max_age_ms,
+                    show_start,
+                    deadline,
                 ): idx
                 for idx, acc_data in indices_to_check
             }
-            for future in concurrent.futures.as_completed(future_to_idx):
+
+            timeout = max(0.0, deadline - time.perf_counter())
+            done, not_done = concurrent.futures.wait(future_to_idx, timeout=timeout)
+
+            for future in done:
                 idx = future_to_idx[future]
                 idx_to_result[idx] = future.result()
+
+            for future in not_done:
+                idx = future_to_idx[future]
+                idx_to_result[idx] = _build_timeout_result(
+                    idx,
+                    acc_map[idx],
+                    auth_mgr,
+                    cache_ttl,
+                    show_start,
+                )
 
     if not json_output:
         with display.console.status("[bold blue]Fetching quotas for all accounts..."):
@@ -335,7 +487,7 @@ def _render_error(
 
 def _apply_cli_query(quotas, query):
     """Apply the CLI --query filter to a list of quota dicts."""
-    if not query:
+    if not query or not quotas:
         return quotas
     for q_str in query:
         q_lower = q_str.lower()
@@ -348,13 +500,15 @@ def _apply_cli_query(quotas, query):
     return quotas
 
 
-def _build_json_results(indices_to_check, idx_to_result, display, show_all, query):
+def _build_json_results(
+    indices_to_check, idx_to_result, display, show_all, query, include_timings
+):
     """Build the JSON output structure for all accounts."""
     results = []
     any_query_matches = False
 
     for idx, acc_data in indices_to_check:
-        email, quotas, client, error = idx_to_result[idx]
+        email, quotas, client, error, timings = idx_to_result[idx]
         alias = acc_data.get("alias", "")
         group_val = acc_data.get("group", "")
 
@@ -366,15 +520,16 @@ def _build_json_results(indices_to_check, idx_to_result, display, show_all, quer
             if filtered_quotas:
                 any_query_matches = True
 
-        results.append(
-            {
-                "email": email,
-                "alias": alias,
-                "group": group_val,
-                "quotas": filtered_quotas,
-                "error": error,
-            }
-        )
+        result = {
+            "email": email,
+            "alias": alias,
+            "group": group_val,
+            "quotas": filtered_quotas,
+            "error": error,
+        }
+        if include_timings:
+            result["timings"] = timings
+        results.append(result)
 
     return results, any_query_matches
 
@@ -432,6 +587,11 @@ def cli(ctx):
     "--no-record", is_flag=True, help="Skip recording quota data to history database."
 )
 @click.option("--verbose", is_flag=True, help="Enable verbose logging.")
+@click.option(
+    "--timings",
+    is_flag=True,
+    help="Include provider timing details in JSON output.",
+)
 def show(
     account,
     alias,
@@ -448,6 +608,7 @@ def show(
     logout_all,
     no_record,
     verbose,
+    timings,
 ):
     """Show current quota status for all accounts."""
     log_level = logging.DEBUG if verbose else logging.WARNING
@@ -526,15 +687,25 @@ def show(
             display.print_main_header()
 
         idx_to_result = _fetch_all_quotas(
-            indices_to_check, auth_mgr, show_all, display, json_output
+            indices_to_check,
+            auth_mgr,
+            show_all,
+            display,
+            json_output,
+            refresh,
+            config.cache_ttl,
+            2000,
         )
+
+        if idx_to_result:
+            auth_mgr.save_accounts()
 
         # --- Record to history database ---
         if not no_record and config.history_enabled:
             try:
                 history_mgr = HistoryManager(config.history_db_path)
                 for idx, acc_data in indices_to_check:
-                    email, quotas, client, error = idx_to_result[idx]
+                    email, quotas, client, error, _timings = idx_to_result[idx]
                     if quotas and not error and client:
                         account_type = acc_data.get("type", "unknown")
                         history_mgr.record_quotas(email, account_type, quotas)
@@ -545,13 +716,18 @@ def show(
         # --- Render output ---
         if json_output:
             results, any_query_matches = _build_json_results(
-                indices_to_check, idx_to_result, display, show_all, query
+                indices_to_check,
+                idx_to_result,
+                display,
+                show_all,
+                query,
+                timings,
             )
             _output_json(results)
         else:
             any_query_matches = False
             for idx, acc_data in indices_to_check:
-                email, quotas, client, error = idx_to_result[idx]
+                email, quotas, client, error, _timings = idx_to_result[idx]
                 matched = _render_account_quotas(
                     display,
                     acc_data,

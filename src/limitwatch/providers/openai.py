@@ -36,6 +36,7 @@ OPENCODE_AUTH_PATH = Path.home() / ".local" / "share" / "opencode" / "auth.json"
 CODEX_CLI_AUTH_PATH = Path.home() / ".codex" / "auth.json"
 
 DEFAULT_TIMEOUT = 10
+FETCH_TIMEOUT = 1.5
 DEVICE_POLL_TIMEOUT = 900  # 15 minutes
 
 
@@ -481,7 +482,11 @@ class OpenAIProvider(BaseProvider):
         """Validate token by fetching usage. Returns user email/identifier."""
         headers = {"Authorization": f"Bearer {access_token}"}
         try:
-            resp = requests.get(USAGE_URL, headers=headers, timeout=DEFAULT_TIMEOUT)
+            resp = requests.get(
+                USAGE_URL,
+                headers=headers,
+                timeout=self.time_remaining(FETCH_TIMEOUT),
+            )
             if resp.status_code == 200:
                 # Fetch account identity from API
                 user_identity = _fetch_user_email_from_api(access_token)
@@ -514,9 +519,16 @@ class OpenAIProvider(BaseProvider):
         email = self.account_data.get("email", "unknown")
         logger.debug(f"[openai] fetch_quotas start account={email}")
 
+        if not self.has_time_remaining():
+            return []
+
         headers = {"Authorization": f"Bearer {self.access_token}"}
         try:
-            resp = requests.get(USAGE_URL, headers=headers, timeout=DEFAULT_TIMEOUT)
+            resp = requests.get(
+                USAGE_URL,
+                headers=headers,
+                timeout=self.time_remaining(FETCH_TIMEOUT),
+            )
         except requests.RequestException as e:
             logger.debug(f"[openai] fetch_quotas request error: {e}")
             return [
@@ -527,6 +539,8 @@ class OpenAIProvider(BaseProvider):
 
         # Try token refresh on 401
         if resp.status_code == 401 and self.refresh_token:
+            if not self.has_time_remaining():
+                return []
             refreshed = _refresh_access_token(self.refresh_token)
             if refreshed:
                 self.access_token = refreshed["access_token"]
@@ -536,7 +550,9 @@ class OpenAIProvider(BaseProvider):
                 headers = {"Authorization": f"Bearer {self.access_token}"}
                 try:
                     resp = requests.get(
-                        USAGE_URL, headers=headers, timeout=DEFAULT_TIMEOUT
+                        USAGE_URL,
+                        headers=headers,
+                        timeout=self.time_remaining(FETCH_TIMEOUT),
                     )
                 except requests.RequestException as e:
                     logger.debug(f"[openai] fetch_quotas retry error: {e}")
@@ -563,6 +579,7 @@ class OpenAIProvider(BaseProvider):
             f"[openai] fetch_quotas done account={email} "
             f"elapsed_ms={elapsed_ms:.1f} quota_count={len(results)}"
         )
+        self.record_timing("openai_total", elapsed_ms)
         return results
 
     def _parse_usage_response(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:

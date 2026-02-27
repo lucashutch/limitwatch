@@ -112,3 +112,14 @@ class Config:
     def history_enabled(self) -> bool:
         """Check if history tracking is enabled."""
         return self.data.get("enableHistory", True)
+
+    @property
+    def cache_ttl(self) -> int:
+        """Get cache TTL in seconds (default: 60)."""
+        value = self.data.get("cacheTtl")
+        if value is None:
+            return 60
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 60

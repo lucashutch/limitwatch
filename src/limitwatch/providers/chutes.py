@@ -58,7 +58,7 @@ def _make_chutes_headers(api_key: str) -> Dict[str, str]:
 
 class ChutesProvider(BaseProvider):
     BASE_URL = "https://api.chutes.ai"
-    FETCH_TIMEOUT = 2.5
+    FETCH_TIMEOUT = 1.5
 
     def __init__(self, account_data: Dict[str, Any]):
         super().__init__(account_data)
@@ -140,6 +140,9 @@ class ChutesProvider(BaseProvider):
         strategy = self.account_data.get("chutesQuotaStrategy", "auto")
         logger.debug(f"[chutes] strategy={strategy}")
 
+        if not self.has_time_remaining():
+            return []
+
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                 balance_future = executor.submit(self._fetch_balance, headers)
@@ -151,12 +154,25 @@ class ChutesProvider(BaseProvider):
                 fallback_quota = fallback_future.result()
 
             list_quotas: List[Dict[str, Any]] = []
-            if strategy == "full" or not fallback_quota:
+            if strategy == "full":
                 list_quotas = self._fetch_quota_list(headers, next_reset)
                 if list_quotas:
                     self.account_data["chutesQuotaStrategy"] = "full"
+                    self.record_timing("chutes_strategy", 0.0, mode="full")
+            elif strategy == "auto":
+                if not fallback_quota and self.has_time_remaining():
+                    list_quotas = self._fetch_quota_list(headers, next_reset)
+                    if list_quotas:
+                        self.account_data["chutesQuotaStrategy"] = "full"
+                        self.record_timing("chutes_strategy", 0.0, mode="full")
+                elif fallback_quota:
+                    self.account_data["chutesQuotaStrategy"] = "fallback"
+                    self.record_timing("chutes_strategy", 0.0, mode="fallback")
             elif fallback_quota:
                 self.account_data["chutesQuotaStrategy"] = "fallback"
+                self.record_timing("chutes_strategy", 0.0, mode="fallback")
+            else:
+                self.record_timing("chutes_strategy", 0.0, mode="auto")
 
             results: List[Dict[str, Any]] = []
             if balance_item:
@@ -176,6 +192,7 @@ class ChutesProvider(BaseProvider):
                 f"[chutes] fetch_quotas done account={email} elapsed_ms={elapsed_ms:.1f} "
                 f"quota_count={len(results)}"
             )
+            self.record_timing("chutes_total", elapsed_ms)
         except Exception as e:
             if "Unauthorized" in str(e):
                 raise
@@ -186,8 +203,12 @@ class ChutesProvider(BaseProvider):
     def _fetch_balance(self, headers: Dict) -> Optional[Dict[str, Any]]:
         """Fetch user balance and return credits quota item if positive."""
         start = perf_counter()
+        if not self.has_time_remaining():
+            return None
         resp = requests.get(
-            f"{self.BASE_URL}/users/me", headers=headers, timeout=self.FETCH_TIMEOUT
+            f"{self.BASE_URL}/users/me",
+            headers=headers,
+            timeout=self.time_remaining(self.FETCH_TIMEOUT),
         )
         if resp.status_code in (401, 403):
             raise Exception("Unauthorized: Invalid Chutes.ai API key")
@@ -198,6 +219,7 @@ class ChutesProvider(BaseProvider):
                 logger.debug(
                     f"[chutes] _fetch_balance success elapsed_ms={elapsed_ms:.1f}"
                 )
+                self.record_timing("chutes_balance", elapsed_ms)
                 return {
                     "name": "Chutes Credits",
                     "display_name": f"Credits: ${balance:.2f}",
@@ -211,15 +233,18 @@ class ChutesProvider(BaseProvider):
         logger.debug(
             f"[chutes] _fetch_balance status={resp.status_code} elapsed_ms={elapsed_ms:.1f}"
         )
+        self.record_timing("chutes_balance", elapsed_ms, status=resp.status_code)
         return None
 
     def _fetch_quota_list(self, headers: Dict, next_reset: str) -> List[Dict[str, Any]]:
         """Fetch quota list and usage for each, returning quota items."""
         start = perf_counter()
+        if not self.has_time_remaining():
+            return []
         resp = requests.get(
             f"{self.BASE_URL}/users/me/quotas",
             headers=headers,
-            timeout=self.FETCH_TIMEOUT,
+            timeout=self.time_remaining(self.FETCH_TIMEOUT),
         )
         if resp.status_code != 200:
             elapsed_ms = (perf_counter() - start) * 1000
@@ -232,7 +257,11 @@ class ChutesProvider(BaseProvider):
         if not isinstance(quotas_list, list):
             return []
 
-        usages = self._fetch_usages_parallel(quotas_list, headers, self.FETCH_TIMEOUT)
+        usage_timeout = self.time_remaining(self.FETCH_TIMEOUT)
+        if usage_timeout <= 0:
+            return []
+        self.record_timing("chutes_usage_timeout", 0.0, timeout_s=usage_timeout)
+        usages = self._fetch_usages_parallel(quotas_list, headers, usage_timeout)
         results = []
 
         for usage in usages:
@@ -252,11 +281,12 @@ class ChutesProvider(BaseProvider):
             f"[chutes] _fetch_quota_list done elapsed_ms={elapsed_ms:.1f} "
             f"entries={len(quotas_list)} quotas={len(results)}"
         )
+        self.record_timing("chutes_quota_list", elapsed_ms)
         return results
 
     @staticmethod
     def _fetch_usages_parallel(
-        quotas_list: List[Dict], headers: Dict, timeout: int
+        quotas_list: List[Dict], headers: Dict, timeout: float
     ) -> List[Optional[Dict]]:
         """Fetch usage for each quota entry in parallel."""
         start = perf_counter()
@@ -278,7 +308,7 @@ class ChutesProvider(BaseProvider):
             return None
 
         with concurrent.futures.ThreadPoolExecutor(
-            max_workers=min(len(quotas_list) or 1, 8)
+            max_workers=min(len(quotas_list) or 1, 4)
         ) as executor:
             result = list(executor.map(fetch_one, quotas_list))
 
@@ -295,10 +325,13 @@ class ChutesProvider(BaseProvider):
         """Fallback: fetch /users/me/quota_usage/me and return one quota item."""
         start = perf_counter()
 
+        if not self.has_time_remaining():
+            return None
+
         resp = requests.get(
             f"{self.BASE_URL}/users/me/quota_usage/me",
             headers=headers,
-            timeout=self.FETCH_TIMEOUT,
+            timeout=self.time_remaining(self.FETCH_TIMEOUT),
         )
         if resp.status_code != 200:
             elapsed_ms = (perf_counter() - start) * 1000
@@ -319,4 +352,5 @@ class ChutesProvider(BaseProvider):
             f"[chutes] _fetch_fallback_quota done elapsed_ms={elapsed_ms:.1f} "
             f"has_quota={bool(quota)}"
         )
+        self.record_timing("chutes_fallback", elapsed_ms)
         return quota
