@@ -52,9 +52,9 @@ def test_chutes_fetch_quotas_success(mock_get):
 
     results = provider.fetch_quotas()
 
-    # Balance + 2 Quotas
+    # Credits + 2 Quotas
     assert len(results) == 3
-    assert any("Balance: $5.00" in r["display_name"] for r in results)
+    assert any("Credits: $5.00" in r["display_name"] for r in results)
     assert any("Quota (250/300)" in r["display_name"] for r in results)
     assert any("Quota: other-uu... (90/100)" in r["display_name"] for r in results)
 
@@ -128,5 +128,31 @@ def test_chutes_provider_filter_quotas():
 
 def test_chutes_provider_sort_key():
     provider = ChutesProvider({})
-    assert provider.get_sort_key({"name": "Balance"}) == (0, 0, "Balance")
-    assert provider.get_sort_key({"name": "Quota"}) == (0, 1, "Quota")
+    assert provider.get_sort_key({"name": "Chutes Credits"}) == (0, 0, "Chutes Credits")
+    assert provider.get_sort_key({"name": "Chutes Balance"}) == (0, 1, "Chutes Balance")
+    assert provider.get_sort_key({"name": "Quota"}) == (1, 0, "Quota")
+
+
+def test_chutes_fetch_quotas_credits_no_progress_bar():
+    """Test that credits balance is displayed without progress bar."""
+    account_data = {"type": "chutes", "apiKey": "fake_key"}
+    provider = ChutesProvider(account_data)
+
+    def side_effect(url, **kwargs):
+        m = MagicMock()
+        m.status_code = 200
+        if "/users/me" in url and "/quotas" not in url:
+            m.json.return_value = {"balance": 25.50}
+        elif "/users/me/quotas" in url:
+            m.json.return_value = []
+        return m
+
+    with patch("limitwatch.providers.chutes.requests.get", side_effect=side_effect):
+        results = provider.fetch_quotas()
+
+    assert len(results) == 1
+    credit_item = results[0]
+    assert credit_item["name"] == "Chutes Credits"
+    assert credit_item["display_name"] == "Credits: $25.50"
+    assert credit_item.get("show_progress") is False
+    assert credit_item.get("endpoint") == "balance"
