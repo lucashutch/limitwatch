@@ -101,12 +101,24 @@ def test_cli_clear_metadata(mock_auth_mgr_cls, mock_config_cls):
     mock_auth_mgr.update_account_metadata.assert_called_once_with(
         "test@example.com", {"alias": "", "group": "none"}
     )
+
+
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+@patch("limitwatch.cli.QuotaClient")
+def test_cli_logout_shows_alias(
+    mock_quota_client_cls, mock_auth_mgr_cls, mock_config_cls
+):
+    """Interactive logout should display and use the account alias as the label."""
     mock_auth_mgr = mock_auth_mgr_cls.return_value
-    mock_auth_mgr.logout.return_value = True
+    mock_auth_mgr.accounts = [
+        {"email": "test@example.com", "alias": "myalias", "type": "google"}
+    ]
+    mock_quota_client_cls.get_available_providers.return_value = {"google": "Google"}
 
     runner = CliRunner()
-    result = runner.invoke(main, ["--logout", "myalias"])
-
+    # Provider 1 (Google), single account (skip account menu), confirm yes
+    result = runner.invoke(main, ["--logout"], input="1\ny\n")
     assert result.exit_code == 0
-    assert "Successfully logged out myalias" in result.output
-    mock_auth_mgr.logout.assert_called_with("myalias")
+    assert "myalias" in result.output
+    mock_auth_mgr.logout.assert_called_once_with("test@example.com")
