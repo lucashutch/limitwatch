@@ -377,11 +377,18 @@ def _build_json_results(indices_to_check, idx_to_result, display, show_all, quer
     return results, any_query_matches
 
 
-# --- Main CLI entrypoint ---
+# --- Main CLI group ---
 
 
-@click.command(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.group(context_settings=dict(help_option_names=["-h", "--help"]))
 @click.version_option(__version__, "--version", "-v", prog_name="limitwatch")
+@click.pass_context
+def cli(ctx):
+    """Monitor API quota usage and reset times across all accounts."""
+    ctx.ensure_object(dict)
+
+
+@cli.command(name="show")
 @click.option("-a", "--account", help="Email of the account to check.")
 @click.option("--alias", help="Set an alias for an account (requires --account).")
 @click.option(
@@ -418,7 +425,7 @@ def _build_json_results(indices_to_check, idx_to_result, display, show_all, quer
     "--no-record", is_flag=True, help="Skip recording quota data to history database."
 )
 @click.option("--verbose", is_flag=True, help="Enable verbose logging.")
-def main(
+def show(
     account,
     alias,
     group,
@@ -435,7 +442,7 @@ def main(
     no_record,
     verbose,
 ):
-    """Monitor API quota usage and reset times across all accounts."""
+    """Show current quota status for all accounts."""
     log_level = logging.DEBUG if verbose else logging.WARNING
     logging.basicConfig(level=log_level, format="%(message)s", datefmt="[%X]")
 
@@ -557,6 +564,70 @@ def main(
 
     except Exception as e:
         display.console.print(f"[red]Error:[/red] {e}")
+
+
+@cli.command(name="history")
+@click.option(
+    "--preset",
+    type=click.Choice(["24h", "7d", "30d", "90d"]),
+    help="Time range preset (default: 24h)",
+)
+@click.option("--since", help="Start time (ISO format or relative like '7d', '24h')")
+@click.option("--until", help="End time (ISO format)")
+@click.option("-a", "--account", help="Filter by account email")
+@click.option("-p", "--provider", help="Filter by provider type")
+@click.option("-q", "--quota", help="Filter by quota name")
+@click.option(
+    "--table", is_flag=True, help="Show time-series table instead of sparklines"
+)
+@click.option("--summary", is_flag=True, help="Show database summary instead of data")
+@click.option("--verbose", is_flag=True, help="Enable verbose logging")
+def history_command(
+    preset, since, until, account, provider, quota, table, summary, verbose
+):
+    """View historical quota data."""
+    log_level = logging.DEBUG if verbose else logging.WARNING
+    logging.basicConfig(level=log_level, format="%(message)s", datefmt="[%X]")
+
+    config = Config()
+    display = DisplayManager()
+    history_mgr = HistoryManager(config.history_db_path)
+
+    if summary:
+        info = history_mgr.get_database_info()
+        display.print_history_summary(info)
+        return
+
+    # Default to 24h if no time range specified
+    if not preset and not since:
+        preset = "24h"
+
+    try:
+        history_data = history_mgr.get_history(
+            preset=preset,
+            since=since,
+            until=until,
+            account_email=account,
+            provider_type=provider,
+            quota_name=quota,
+        )
+
+        if table:
+            display.render_history_table(history_data)
+        else:
+            display.render_history_sparklines(history_data)
+
+    except Exception as e:
+        display.console.print(f"[red]Error:[/red] {e}")
+
+
+# Default command is "show"
+cli.add_command(show, name="")
+
+
+def main():
+    """Entry point for the CLI."""
+    cli()
 
 
 if __name__ == "__main__":
