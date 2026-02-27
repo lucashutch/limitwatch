@@ -1,8 +1,8 @@
 from unittest.mock import MagicMock, patch
-from gemini_quota.providers.chutes import ChutesProvider
+from limitwatch.providers.chutes import ChutesProvider
 
 
-@patch("gemini_quota.providers.chutes.requests.get")
+@patch("limitwatch.providers.chutes.requests.get")
 def test_chutes_login_success(mock_get):
     provider = ChutesProvider({})
     mock_get.return_value.status_code = 200
@@ -25,7 +25,7 @@ def test_chutes_login_success(mock_get):
     assert kwargs["headers"]["Content-Type"] == "application/json"
 
 
-@patch("gemini_quota.providers.chutes.requests.get")
+@patch("limitwatch.providers.chutes.requests.get")
 def test_chutes_fetch_quotas_success(mock_get):
     account_data = {"type": "chutes", "apiKey": "fake_key"}
     provider = ChutesProvider(account_data)
@@ -65,7 +65,7 @@ def test_chutes_fetch_quotas_success(mock_get):
 
 
 @patch("click.prompt")
-@patch("gemini_quota.providers.chutes.requests.get")
+@patch("limitwatch.providers.chutes.requests.get")
 def test_chutes_interactive_login_strip(mock_get, mock_prompt):
     provider = ChutesProvider({})
     mock_prompt.return_value = "  padded_key  "
@@ -78,7 +78,7 @@ def test_chutes_interactive_login_strip(mock_get, mock_prompt):
     assert mock_get.call_args.kwargs["headers"]["Authorization"] == "padded_key"
 
 
-@patch("gemini_quota.providers.chutes.requests.get")
+@patch("limitwatch.providers.chutes.requests.get")
 def test_chutes_fetch_quotas_no_list_fallback(mock_get):
     provider = ChutesProvider({"apiKey": "fake_key"})
 
@@ -109,7 +109,7 @@ def test_chutes_provider_metadata():
     assert provider.get_color({}) == "yellow"
 
 
-@patch("gemini_quota.providers.chutes.requests.get")
+@patch("limitwatch.providers.chutes.requests.get")
 def test_chutes_fetch_quotas_no_quota_info(mock_get):
     provider = ChutesProvider({"apiKey": "fake_key"})
     mock_get.return_value.status_code = 200

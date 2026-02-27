@@ -2,7 +2,7 @@ import json
 import base64
 import pytest
 from unittest.mock import patch, Mock
-from gemini_quota.providers.openai import (
+from limitwatch.providers.openai import (
     OpenAIProvider,
     _discover_opencode_token,
     _discover_codex_cli_token,
@@ -115,7 +115,7 @@ def test_discover_codex_cli_token_flat(tmp_path):
 # --- Token refresh ---
 
 
-@patch("gemini_quota.providers.openai.requests.post")
+@patch("limitwatch.providers.openai.requests.post")
 def test_refresh_access_token_success(mock_post):
     mock_post.return_value.status_code = 200
     mock_post.return_value.json.return_value = {
@@ -126,14 +126,14 @@ def test_refresh_access_token_success(mock_post):
     assert result == {"access_token": "new-tok", "refresh_token": "new-refresh"}
 
 
-@patch("gemini_quota.providers.openai.requests.post")
+@patch("limitwatch.providers.openai.requests.post")
 def test_refresh_access_token_failure(mock_post):
     mock_post.return_value.status_code = 401
     result = _refresh_access_token("bad-refresh")
     assert result is None
 
 
-@patch("gemini_quota.providers.openai.requests.post")
+@patch("limitwatch.providers.openai.requests.post")
 def test_refresh_access_token_keeps_old_refresh(mock_post):
     """If response doesn't include refresh_token, keep the old one."""
     mock_post.return_value.status_code = 200
@@ -163,7 +163,7 @@ def test_format_reset_time_fallback():
 # --- API-based email fetching ---
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_user_email_from_api_success(mock_get):
     """Fetch email from /me endpoint."""
     mock_get.return_value.status_code = 200
@@ -173,7 +173,7 @@ def test_fetch_user_email_from_api_success(mock_get):
     assert result == "user@example.com"
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_user_email_from_api_nested_user(mock_get):
     """Fetch email from nested user object."""
     mock_get.return_value.status_code = 200
@@ -183,7 +183,7 @@ def test_fetch_user_email_from_api_nested_user(mock_get):
     assert result == "nested@example.com"
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_user_email_from_api_not_found(mock_get):
     """Return None when email not found in response."""
     mock_get.return_value.status_code = 200
@@ -193,7 +193,7 @@ def test_fetch_user_email_from_api_not_found(mock_get):
     assert result is None
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_user_email_from_api_username_fallback(mock_get):
     """Use username when email is not present in /me response."""
     mock_get.return_value.status_code = 200
@@ -203,7 +203,7 @@ def test_fetch_user_email_from_api_username_fallback(mock_get):
     assert result == "codex-user"
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_user_email_from_api_deeply_nested_name(mock_get):
     """Find identity in deeply nested profile payload."""
     mock_get.return_value.status_code = 200
@@ -215,7 +215,7 @@ def test_fetch_user_email_from_api_deeply_nested_name(mock_get):
     assert result == "Nested Name"
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_user_email_from_api_error(mock_get):
     """Return None on API error."""
     mock_get.return_value.status_code = 401
@@ -244,7 +244,7 @@ def test_extract_identity_from_token_claims_rejects_oauth_subject():
     assert result is None
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_validate_token_falls_back_to_token_claims(mock_get):
     """Use token claims when /me lacks account identity fields."""
 
@@ -269,7 +269,7 @@ def test_validate_token_falls_back_to_token_claims(mock_get):
     assert identity == "claims-user"
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_validate_token_ignores_oauth_subject_and_uses_default(mock_get):
     """If only opaque subject exists, fallback to default account label."""
 
@@ -297,7 +297,7 @@ def test_validate_token_ignores_oauth_subject_and_uses_default(mock_get):
 # --- Login ---
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_login_success(mock_get):
     """Test login with email fetched from /me API endpoint."""
 
@@ -331,7 +331,7 @@ def test_login_no_token():
         provider.login()
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_login_invalid_token(mock_get):
     mock_get.return_value.status_code = 401
     provider = OpenAIProvider({})
@@ -339,7 +339,7 @@ def test_login_invalid_token(mock_get):
         provider.login(access_token="bad-token")
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_login_with_token_refresh(mock_get):
     """Login refreshes token on 401 and retries."""
     call_count = [0]
@@ -363,7 +363,7 @@ def test_login_with_token_refresh(mock_get):
 
     mock_get.side_effect = side_effect
 
-    with patch("gemini_quota.providers.openai._refresh_access_token") as mock_refresh:
+    with patch("limitwatch.providers.openai._refresh_access_token") as mock_refresh:
         mock_refresh.return_value = {
             "access_token": "refreshed-token",
             "refresh_token": "new-refresh",
@@ -377,7 +377,7 @@ def test_login_with_token_refresh(mock_get):
 # --- Fetch quotas ---
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_quotas_primary_and_secondary(mock_get):
     """Parse a full usage response with primary and secondary windows."""
     mock_get.return_value.status_code = 200
@@ -414,7 +414,7 @@ def test_fetch_quotas_primary_and_secondary(mock_get):
     assert secondary["used_pct"] == 10.0
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_quotas_with_credits(mock_get):
     """Parse usage response with credits."""
     mock_get.return_value.status_code = 200
@@ -436,7 +436,7 @@ def test_fetch_quotas_with_credits(mock_get):
     assert credits[0]["balance"] == 75.5
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_quotas_empty_response(mock_get):
     """Empty rate_limit still returns a generic entry."""
     mock_get.return_value.status_code = 200
@@ -452,7 +452,7 @@ def test_fetch_quotas_empty_response(mock_get):
     assert quotas[0]["remaining_pct"] == 100.0
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_quotas_no_token(mock_get):
     """No token returns empty list."""
     provider = OpenAIProvider({"email": "user"})
@@ -461,7 +461,7 @@ def test_fetch_quotas_no_token(mock_get):
     mock_get.assert_not_called()
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_quotas_http_error(mock_get):
     """Non-200 response returns error quota."""
     mock_get.return_value.status_code = 500
@@ -473,7 +473,7 @@ def test_fetch_quotas_http_error(mock_get):
     assert quotas[0].get("is_error") is True
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_quotas_network_error(mock_get):
     """Network error returns error quota."""
     import requests as req
@@ -487,7 +487,7 @@ def test_fetch_quotas_network_error(mock_get):
     assert quotas[0].get("is_error") is True
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_quotas_token_refresh_on_401(mock_get):
     """Fetch retries with refreshed token on 401."""
     call_count = [0]
@@ -512,7 +512,7 @@ def test_fetch_quotas_token_refresh_on_401(mock_get):
 
     mock_get.side_effect = side_effect
 
-    with patch("gemini_quota.providers.openai._refresh_access_token") as mock_refresh:
+    with patch("limitwatch.providers.openai._refresh_access_token") as mock_refresh:
         mock_refresh.return_value = {
             "access_token": "new-tok",
             "refresh_token": "new-ref",
@@ -624,7 +624,7 @@ def test_parse_window_no_duration():
 # --- Additional rate limits ---
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_quotas_additional_rate_limits(mock_get):
     """Parse additional rate limits from response."""
     mock_get.return_value.status_code = 200
@@ -656,7 +656,7 @@ def test_fetch_quotas_additional_rate_limits(mock_get):
     assert cloud[0]["used_pct"] == 60.0
 
 
-@patch("gemini_quota.providers.openai.requests.get")
+@patch("limitwatch.providers.openai.requests.get")
 def test_fetch_quotas_free_tier_with_none_values(mock_get):
     """Handle free tier response with None values for rate limits."""
     mock_get.return_value.status_code = 200

@@ -1,18 +1,18 @@
 import json
 from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
-from gemini_quota.cli import main
+from limitwatch.cli import main
 
 
 def test_cli_version():
     runner = CliRunner()
     result = runner.invoke(main, ["--version"])
     assert result.exit_code == 0
-    assert "gemini-quota" in result.output
+    assert "limitwatch" in result.output
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
 def test_cli_no_accounts_file(mock_auth_mgr_cls, mock_config_cls):
     mock_config = mock_config_cls.return_value
     mock_config.auth_path.exists.return_value = False
@@ -23,8 +23,8 @@ def test_cli_no_accounts_file(mock_auth_mgr_cls, mock_config_cls):
     assert "Accounts file not found" in result.output
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
 def test_cli_empty_accounts(mock_auth_mgr_cls, mock_config_cls):
     mock_config = mock_config_cls.return_value
     mock_config.auth_path.exists.return_value = True
@@ -38,9 +38,9 @@ def test_cli_empty_accounts(mock_auth_mgr_cls, mock_config_cls):
     assert "No accounts found in file" in result.output
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
-@patch("gemini_quota.cli.QuotaClient")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+@patch("limitwatch.cli.QuotaClient")
 def test_cli_list_quotas(mock_quota_client_cls, mock_auth_mgr_cls, mock_config_cls):
     mock_config = mock_config_cls.return_value
     mock_config.auth_path.exists.return_value = True
@@ -62,8 +62,8 @@ def test_cli_list_quotas(mock_quota_client_cls, mock_auth_mgr_cls, mock_config_c
     assert "test@example.com" in result.output
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
 def test_cli_logout(mock_auth_mgr_cls, mock_config_cls):
     mock_auth_mgr = mock_auth_mgr_cls.return_value
     mock_auth_mgr.logout.return_value = True
@@ -75,9 +75,9 @@ def test_cli_logout(mock_auth_mgr_cls, mock_config_cls):
     mock_auth_mgr.logout.assert_called_with("test@example.com")
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
-@patch("gemini_quota.cli.QuotaClient")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+@patch("limitwatch.cli.QuotaClient")
 def test_cli_list_quotas_json(
     mock_quota_client_cls, mock_auth_mgr_cls, mock_config_cls
 ):
@@ -108,9 +108,9 @@ def test_cli_list_quotas_json(
     assert data[0]["quotas"][0]["name"] == "quota1"
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
-@patch("gemini_quota.cli.QuotaClient")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+@patch("limitwatch.cli.QuotaClient")
 def test_cli_login_interactive(
     mock_quota_client_cls, mock_auth_mgr_cls, mock_config_cls
 ):
@@ -136,8 +136,8 @@ def test_cli_login_interactive(
     assert "Successfully logged in as test@example.com" in result.output
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
 def test_cli_update_project_id(mock_auth_mgr_cls, mock_config_cls):
     mock_config = mock_config_cls.return_value
     mock_config.auth_path.exists.return_value = True
@@ -159,9 +159,9 @@ def test_cli_update_project_id(mock_auth_mgr_cls, mock_config_cls):
     )
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
-@patch("gemini_quota.cli.QuotaClient")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+@patch("limitwatch.cli.QuotaClient")
 def test_cli_login_failure_json(
     mock_quota_client_cls, mock_auth_mgr_cls, mock_config_cls
 ):
@@ -176,8 +176,8 @@ def test_cli_login_failure_json(
     assert "API Error" in data["message"]
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
 def test_cli_fetch_errors(mock_auth_mgr_cls, mock_config_cls):
     mock_config = mock_config_cls.return_value
     mock_config.auth_path.exists.return_value = True
@@ -203,8 +203,8 @@ def test_cli_fetch_errors(mock_auth_mgr_cls, mock_config_cls):
     assert "Token refresh failed: Refresh Error" in result.output
 
 
-@patch("gemini_quota.cli.Config")
-@patch("gemini_quota.cli.AuthManager")
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
 def test_cli_account_not_found(mock_auth_mgr_cls, mock_config_cls):
     mock_config = mock_config_cls.return_value
     mock_config.auth_path.exists.return_value = True
