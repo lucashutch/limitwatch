@@ -108,7 +108,9 @@ def _interactive_login(display):
 def _non_interactive_login(provider):
     """Run the non-interactive login flow for JSON/scripted usage."""
     p_type = (
-        provider if provider in ["google", "chutes", "github_copilot"] else "google"
+        provider
+        if provider in ["google", "chutes", "github_copilot", "openai"]
+        else "google"
     )
     client = QuotaClient(account_data={"type": p_type})
     return client.provider.login()
