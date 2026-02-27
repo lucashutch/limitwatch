@@ -48,3 +48,4 @@ Each provider is responsible for its own:
 - **Provider Isolation:** Do not add provider-specific strings or logic to `display.py` or `cli.py`. Use the `BaseProvider` interface.
 - **Path Construction:** Always use absolute paths for file operations.
 - **Security:** Never log or commit OAuth secrets or API keys.
+- **Python Tooling:** Always use `uv` to run commands and manage the virtual environment. Never use `pip`, `python`, or `venv` directly — use `uv run <cmd>`, `uv add <pkg>`, `uv sync`, etc.
