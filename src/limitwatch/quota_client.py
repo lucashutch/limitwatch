@@ -3,6 +3,7 @@ from .providers.google import GoogleProvider
 from .providers.chutes import ChutesProvider
 from .providers.github_copilot import GitHubCopilotProvider
 from .providers.openai import OpenAIProvider
+from .providers.openrouter import OpenRouterProvider
 
 
 class QuotaClient:
@@ -28,6 +29,8 @@ class QuotaClient:
             self.provider = GitHubCopilotProvider(self.account_data)
         elif account_type == "openai":
             self.provider = OpenAIProvider(self.account_data)
+        elif account_type == "openrouter":
+            self.provider = OpenRouterProvider(self.account_data)
         else:
             self.provider = GoogleProvider(self.account_data, self.credentials)
 
@@ -70,4 +73,5 @@ class QuotaClient:
             "chutes": ChutesProvider({}).provider_name,
             "github_copilot": GitHubCopilotProvider({}).provider_name,
             "openai": OpenAIProvider({}).provider_name,
+            "openrouter": OpenRouterProvider({}).provider_name,
         }
