@@ -87,9 +87,9 @@ class TestHistoryManager:
 
         mock_storage.record_quotas.assert_called_once()
         call_args = mock_storage.record_quotas.call_args
-        assert call_args[1]["account_email"] == "test@example.com"
-        assert call_args[1]["provider_type"] == "google"
-        assert call_args[1]["quotas"] == quotas
+        assert call_args[0][0] == "test@example.com"
+        assert call_args[0][1] == "google"
+        assert call_args[0][2] == quotas
 
     def test_get_history_with_preset(self, history_mgr, mock_storage):
         """Test getting history with a preset."""

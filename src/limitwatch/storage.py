@@ -23,14 +23,16 @@ CREATE TABLE IF NOT EXISTS quota_snapshots (
     limit_val REAL,
     reset_time TEXT,
     timestamp TEXT NOT NULL,
+    hour_bucket TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(account_email, quota_name, strftime('%Y-%m-%d %H', timestamp))
+    UNIQUE(account_email, quota_name, hour_bucket)
 );
 
 CREATE INDEX IF NOT EXISTS idx_snapshots_account ON quota_snapshots(account_email);
 CREATE INDEX IF NOT EXISTS idx_snapshots_provider ON quota_snapshots(provider_type);
 CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON quota_snapshots(timestamp);
 CREATE INDEX IF NOT EXISTS idx_snapshots_name ON quota_snapshots(quota_name);
+CREATE INDEX IF NOT EXISTS idx_snapshots_hour ON quota_snapshots(hour_bucket);
 """
 
 
@@ -99,8 +101,8 @@ class Storage:
                     """
                     INSERT OR REPLACE INTO quota_snapshots
                     (account_email, provider_type, quota_name, display_name,
-                     remaining_pct, used, limit_val, reset_time, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     remaining_pct, used, limit_val, reset_time, timestamp, hour_bucket)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         account_email,
@@ -112,6 +114,7 @@ class Storage:
                         quota.get("limit"),
                         str(quota.get("reset", "")),
                         timestamp_str,
+                        hour_str,
                     ),
                 )
                 inserted += 1
