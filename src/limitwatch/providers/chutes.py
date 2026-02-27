@@ -99,8 +99,11 @@ class ChutesProvider(BaseProvider):
 
     def get_sort_key(self, quota: Dict[str, Any]) -> Tuple[int, int, str]:
         name = quota.get("name", "")
-        prio = 0 if "Balance" in name else 1
-        return 0, prio, name
+        if "Credits" in name:
+            return 0, 0, name
+        if "Balance" in name:
+            return 0, 1, name
+        return 1, 0, name
 
     def login(self, **kwargs) -> Dict[str, Any]:
         """Perform Chutes.ai login using an API key and return account data."""
@@ -181,7 +184,7 @@ class ChutesProvider(BaseProvider):
         return results
 
     def _fetch_balance(self, headers: Dict) -> Optional[Dict[str, Any]]:
-        """Fetch user balance and return balance quota item if positive."""
+        """Fetch user balance and return credits quota item if positive."""
         start = perf_counter()
         resp = requests.get(
             f"{self.BASE_URL}/users/me", headers=headers, timeout=self.FETCH_TIMEOUT
@@ -196,11 +199,13 @@ class ChutesProvider(BaseProvider):
                     f"[chutes] _fetch_balance success elapsed_ms={elapsed_ms:.1f}"
                 )
                 return {
-                    "name": "Chutes Balance",
-                    "display_name": f"Balance: ${balance:.2f}",
+                    "name": "Chutes Credits",
+                    "display_name": f"Credits: ${balance:.2f}",
                     "remaining_pct": 100.0,
                     "reset": "N/A",
                     "source_type": "Chutes",
+                    "endpoint": "balance",
+                    "show_progress": False,
                 }
         elapsed_ms = (perf_counter() - start) * 1000
         logger.debug(
