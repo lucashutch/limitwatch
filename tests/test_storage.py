@@ -238,13 +238,18 @@ class TestStorage:
 
     def test_get_distinct_values(self, temp_db):
         """Test getting distinct accounts, providers, and quotas."""
-        # Add mixed data
-        for provider in ["google", "chutes", "google"]:
+        from datetime import datetime, timezone, timedelta
+
+        # Add mixed data with different timestamps to avoid deduplication
+        base_time = datetime(2024, 1, 15, 10, 0, tzinfo=timezone.utc)
+
+        for hour_offset, provider in enumerate(["google", "chutes", "google"]):
             for i in range(2):
                 temp_db.record_quotas(
                     account_email=f"user{i}@example.com",
                     provider_type=provider,
                     quotas=[{"name": f"quota_{i}", "remaining_pct": 100.0}],
+                    timestamp=base_time + timedelta(hours=hour_offset, minutes=i),
                 )
 
         accounts = temp_db.get_distinct_accounts()
