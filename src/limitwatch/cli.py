@@ -4,11 +4,14 @@ import click
 import logging
 import time
 import concurrent.futures
+from pathlib import Path
 from importlib.metadata import version, PackageNotFoundError
 from .config import Config
 from .auth import AuthManager
 from .quota_client import QuotaClient
 from .display import DisplayManager
+from .history import HistoryManager
+from .export import Exporter
 
 logger = logging.getLogger(__name__)
 
@@ -376,11 +379,23 @@ def _build_json_results(indices_to_check, idx_to_result, display, show_all, quer
     return results, any_query_matches
 
 
-# --- Main CLI entrypoint ---
+# --- Main CLI group ---
 
 
-@click.command(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.group(
+    context_settings=dict(help_option_names=["-h", "--help"]),
+    invoke_without_command=True,
+)
 @click.version_option(__version__, "--version", "-v", prog_name="limitwatch")
+@click.pass_context
+def cli(ctx):
+    """Monitor API quota usage and reset times across all accounts."""
+    ctx.ensure_object(dict)
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(show)
+
+
+@cli.command(name="show")
 @click.option("-a", "--account", help="Email of the account to check.")
 @click.option("--alias", help="Set an alias for an account (requires --account).")
 @click.option(
@@ -413,8 +428,11 @@ def _build_json_results(indices_to_check, idx_to_result, display, show_all, quer
     "--logout", is_flag=True, help="Log out from a saved account interactively."
 )
 @click.option("--logout-all", is_flag=True, help="Logout from all accounts.")
+@click.option(
+    "--no-record", is_flag=True, help="Skip recording quota data to history database."
+)
 @click.option("--verbose", is_flag=True, help="Enable verbose logging.")
-def main(
+def show(
     account,
     alias,
     group,
@@ -428,9 +446,10 @@ def main(
     project_id,
     logout,
     logout_all,
+    no_record,
     verbose,
 ):
-    """Monitor API quota usage and reset times across all accounts."""
+    """Show current quota status for all accounts."""
     log_level = logging.DEBUG if verbose else logging.WARNING
     logging.basicConfig(level=log_level, format="%(message)s", datefmt="[%X]")
 
@@ -510,6 +529,19 @@ def main(
             indices_to_check, auth_mgr, show_all, display, json_output
         )
 
+        # --- Record to history database ---
+        if not no_record and config.history_enabled:
+            try:
+                history_mgr = HistoryManager(config.history_db_path)
+                for idx, acc_data in indices_to_check:
+                    email, quotas, client, error = idx_to_result[idx]
+                    if quotas and not error and client:
+                        account_type = acc_data.get("type", "unknown")
+                        history_mgr.record_quotas(email, account_type, quotas)
+                        logger.debug(f"Recorded quotas to history for {email}")
+            except Exception as e:
+                logger.warning(f"Failed to record quota history: {e}")
+
         # --- Render output ---
         if json_output:
             results, any_query_matches = _build_json_results(
@@ -541,5 +573,201 @@ def main(
         display.console.print(f"[red]Error:[/red] {e}")
 
 
-if __name__ == "__main__":
-    main()
+@cli.command(name="history")
+@click.option(
+    "--preset",
+    type=click.Choice(["24h", "7d", "30d", "90d"]),
+    help="Time range preset (default: 24h)",
+)
+@click.option("--since", help="Start time (ISO format or relative like '7d', '24h')")
+@click.option("--until", help="End time (ISO format)")
+@click.option("-a", "--account", help="Filter by account email")
+@click.option("-p", "--provider", help="Filter by provider type")
+@click.option("-q", "--quota", help="Filter by quota name")
+@click.option(
+    "--table", is_flag=True, help="Show time-series table instead of sparklines"
+)
+@click.option("--summary", is_flag=True, help="Show database summary instead of data")
+@click.option(
+    "--heatmap",
+    "view_type",
+    flag_value="heatmap",
+    help="Show activity heatmap (days × accounts)",
+)
+@click.option(
+    "--chart",
+    "view_type",
+    flag_value="chart",
+    help="Show ASCII line chart of quota remaining %",
+)
+@click.option(
+    "--calendar", "view_type", flag_value="calendar", help="Show weekly calendar view"
+)
+@click.option(
+    "--bars", "view_type", flag_value="bars", help="Show daily credit consumption bars"
+)
+@click.option(
+    "--stats",
+    "view_type",
+    flag_value="stats",
+    help="Show comprehensive statistics dashboard",
+)
+@click.option("--verbose", is_flag=True, help="Enable verbose logging")
+def history_command(
+    preset, since, until, account, provider, quota, table, summary, view_type, verbose
+):
+    """View historical quota data."""
+    log_level = logging.DEBUG if verbose else logging.WARNING
+    logging.basicConfig(level=log_level, format="%(message)s", datefmt="[%X]")
+
+    config = Config()
+    display = DisplayManager()
+    history_mgr = HistoryManager(config.history_db_path)
+
+    if summary:
+        info = history_mgr.get_database_info()
+        display.print_history_summary(info)
+        return
+
+    if view_type in ("heatmap", "chart", "calendar", "bars", "stats"):
+        try:
+            weekly_data = history_mgr.get_weekly_activity(
+                account_email=account,
+                provider_type=provider,
+            )
+
+            if view_type == "heatmap":
+                display.render_activity_heatmap(weekly_data)
+            elif view_type == "chart":
+                display.render_ascii_chart(weekly_data)
+            elif view_type == "calendar":
+                display.render_calendar_view(weekly_data)
+            elif view_type == "bars":
+                display.render_daily_bars(weekly_data)
+            elif view_type == "stats":
+                # Fetch additional data needed for the stats dashboard
+                effective_preset = preset or "7d"
+                history_data = history_mgr.get_history(
+                    preset=effective_preset,
+                    since=since,
+                    until=until,
+                    account_email=account,
+                    provider_type=provider,
+                    quota_name=quota,
+                )
+                aggregation_data = history_mgr.get_aggregation(
+                    preset=effective_preset,
+                    since=since,
+                    until=until,
+                    account_email=account,
+                    provider_type=provider,
+                )
+                display.render_stats_dashboard(
+                    history_data, weekly_data, aggregation_data
+                )
+
+        except Exception as e:
+            display.console.print(f"[red]Error:[/red] {e}")
+        return
+
+    # Default to 24h if no time range specified
+    if not preset and not since:
+        preset = "24h"
+
+    try:
+        history_data = history_mgr.get_history(
+            preset=preset,
+            since=since,
+            until=until,
+            account_email=account,
+            provider_type=provider,
+            quota_name=quota,
+        )
+
+        if table:
+            display.render_history_table(history_data)
+        else:
+            display.render_history_sparklines(history_data)
+
+    except Exception as e:
+        display.console.print(f"[red]Error:[/red] {e}")
+
+
+@cli.command(name="export")
+@click.option(
+    "--format",
+    "export_format",
+    type=click.Choice(["csv", "markdown"]),
+    default="csv",
+    help="Export format (default: csv)",
+)
+@click.option("-o", "--output", help="Output file path (default: stdout)")
+@click.option(
+    "--preset",
+    type=click.Choice(["24h", "7d", "30d", "90d"]),
+    help="Time range preset",
+)
+@click.option("--since", help="Start time (ISO format or relative like '7d', '24h')")
+@click.option("--until", help="End time (ISO format)")
+@click.option("-a", "--account", help="Filter by account email")
+@click.option("-p", "--provider", help="Filter by provider type")
+@click.option("-q", "--quota", help="Filter by quota name")
+@click.option("--verbose", is_flag=True, help="Enable verbose logging")
+def export_command(
+    export_format, output, preset, since, until, account, provider, quota, verbose
+):
+    """Export historical quota data to CSV or Markdown."""
+    log_level = logging.DEBUG if verbose else logging.WARNING
+    logging.basicConfig(level=log_level, format="%(message)s", datefmt="[%X]")
+
+    config = Config()
+    exporter = Exporter(HistoryManager(config.history_db_path))
+
+    # Default to 7d if no time range specified
+    if not preset and not since:
+        preset = "7d"
+
+    try:
+        if export_format == "csv":
+            result = exporter.export_csv(
+                output_path=Path(output) if output else None,
+                preset=preset,
+                since=since,
+                until=until,
+                account_email=account,
+                provider_type=provider,
+                quota_name=quota,
+            )
+            if not output:
+                print(result)
+        elif export_format == "markdown":
+            result = exporter.export_markdown(
+                output_path=Path(output) if output else None,
+                preset=preset,
+                since=since,
+                until=until,
+                account_email=account,
+                provider_type=provider,
+                quota_name=quota,
+            )
+            if not output:
+                print(result)
+
+        if output:
+            click.echo(f"Exported to {output}")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+
+
+# Default command is "show"
+cli.add_command(show, name="")
+
+
+# Export the CLI group as 'main' for backward compatibility with tests
+main = cli
+
+
+def cli_entry_point():
+    """Entry point for the CLI (used by setup.py/pyproject.toml)."""
+    cli()

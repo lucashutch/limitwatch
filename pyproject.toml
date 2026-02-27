@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-limitwatch = "limitwatch.cli:main"
+limitwatch = "limitwatch.cli:cli_entry_point"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
