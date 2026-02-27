@@ -1,10 +1,75 @@
 import json
+import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
+
+import jsonschema
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "limitwatch"
 DEFAULT_CONFIG_FILE = DEFAULT_CONFIG_DIR / "config.json"
 MANAGED_ACCOUNTS_FILE = DEFAULT_CONFIG_DIR / "accounts.json"
+
+ACCOUNTS_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+        "accounts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["type", "email"],
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "google",
+                            "chutes",
+                            "github_copilot",
+                            "openai",
+                            "openrouter",
+                        ],
+                    },
+                    "email": {"type": "string"},
+                    "refreshToken": {"type": "string"},
+                    "apiKey": {"type": "string"},
+                    "services": {"type": "array", "items": {"type": "string"}},
+                    "projectId": {"type": "string"},
+                    "managedProjectId": {"type": "string"},
+                    "alias": {"type": "string"},
+                    "group": {"type": "string"},
+                },
+            },
+        },
+        "activeIndex": {"type": "integer", "minimum": 0},
+    },
+}
+
+CONFIG_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+        "alertThreshold": {"type": "number", "minimum": 0, "maximum": 100},
+        "cacheTtl": {"type": "integer", "minimum": 0},
+        "theme": {"type": "string", "enum": ["default", "dark", "light"]},
+    },
+}
+
+
+def validate_schema(
+    data: Dict[str, Any], schema: Dict[str, Any], filename: str
+) -> bool:
+    """Validate data against schema. Returns True if valid, logs warning if invalid."""
+    try:
+        jsonschema.validate(instance=data, schema=schema)
+        return True
+    except jsonschema.ValidationError as e:
+        logger.warning(f"Schema validation failed for {filename}: {e.message}")
+        return False
+    except jsonschema.SchemaError as e:
+        logger.error(f"Invalid schema for {filename}: {e.message}")
+        return False
 
 
 class Config:
@@ -18,7 +83,9 @@ class Config:
             return {}
         try:
             with open(self.config_file, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+            validate_schema(data, CONFIG_SCHEMA, "config.json")
+            return data
         except Exception:
             return {}
 
