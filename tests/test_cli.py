@@ -64,15 +64,104 @@ def test_cli_list_quotas(mock_quota_client_cls, mock_auth_mgr_cls, mock_config_c
 
 @patch("limitwatch.cli.Config")
 @patch("limitwatch.cli.AuthManager")
-def test_cli_logout(mock_auth_mgr_cls, mock_config_cls):
+@patch("limitwatch.cli.QuotaClient")
+def test_cli_logout_interactive_happy_path(
+    mock_quota_client_cls, mock_auth_mgr_cls, mock_config_cls
+):
     mock_auth_mgr = mock_auth_mgr_cls.return_value
-    mock_auth_mgr.logout.return_value = True
+    mock_auth_mgr.accounts = [{"email": "test@example.com", "type": "google"}]
+    mock_quota_client_cls.get_available_providers.return_value = {
+        "google": "Google",
+        "chutes": "Chutes",
+    }
 
     runner = CliRunner()
-    result = runner.invoke(main, ["--logout", "test@example.com"])
+    # Provider 1 (Google), auto-skips account menu (1 account), confirm yes
+    result = runner.invoke(main, ["--logout"], input="1\ny\n")
     assert result.exit_code == 0
-    assert "Successfully logged out test@example.com" in result.output
-    mock_auth_mgr.logout.assert_called_with("test@example.com")
+    assert "Successfully logged out" in result.output
+    mock_auth_mgr.logout.assert_called_once_with("test@example.com")
+
+
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+@patch("limitwatch.cli.QuotaClient")
+def test_cli_logout_interactive_multiple_accounts(
+    mock_quota_client_cls, mock_auth_mgr_cls, mock_config_cls
+):
+    mock_auth_mgr = mock_auth_mgr_cls.return_value
+    mock_auth_mgr.accounts = [
+        {"email": "a@example.com", "type": "google"},
+        {"email": "b@example.com", "type": "google"},
+    ]
+    mock_quota_client_cls.get_available_providers.return_value = {"google": "Google"}
+
+    runner = CliRunner()
+    # Provider 1 (Google), account 2, confirm yes
+    result = runner.invoke(main, ["--logout"], input="1\n2\ny\n")
+    assert result.exit_code == 0
+    assert "Successfully logged out" in result.output
+    mock_auth_mgr.logout.assert_called_once_with("b@example.com")
+
+
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+def test_cli_logout_interactive_no_accounts(mock_auth_mgr_cls, mock_config_cls):
+    mock_auth_mgr = mock_auth_mgr_cls.return_value
+    mock_auth_mgr.accounts = []
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["--logout"])
+    assert result.exit_code == 0
+    assert "No accounts found" in result.output
+    mock_auth_mgr.logout.assert_not_called()
+
+
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+@patch("limitwatch.cli.QuotaClient")
+def test_cli_logout_interactive_cancel(
+    mock_quota_client_cls, mock_auth_mgr_cls, mock_config_cls
+):
+    mock_auth_mgr = mock_auth_mgr_cls.return_value
+    mock_auth_mgr.accounts = [{"email": "test@example.com", "type": "google"}]
+    mock_quota_client_cls.get_available_providers.return_value = {"google": "Google"}
+
+    runner = CliRunner()
+    # Provider 1 (Google), confirm no
+    result = runner.invoke(main, ["--logout"], input="1\nN\n")
+    assert result.exit_code == 0
+    assert "cancelled" in result.output.lower()
+    mock_auth_mgr.logout.assert_not_called()
+
+
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+def test_cli_logout_all_confirmed(mock_auth_mgr_cls, mock_config_cls):
+    mock_auth_mgr = mock_auth_mgr_cls.return_value
+    mock_auth_mgr.accounts = [
+        {"email": "a@example.com", "type": "google"},
+        {"email": "b@example.com", "type": "chutes"},
+    ]
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["--logout-all"], input="y\n")
+    assert result.exit_code == 0
+    assert "Successfully logged out from all accounts" in result.output
+    mock_auth_mgr.logout_all.assert_called_once()
+
+
+@patch("limitwatch.cli.Config")
+@patch("limitwatch.cli.AuthManager")
+def test_cli_logout_all_cancelled(mock_auth_mgr_cls, mock_config_cls):
+    mock_auth_mgr = mock_auth_mgr_cls.return_value
+    mock_auth_mgr.accounts = [{"email": "a@example.com", "type": "google"}]
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["--logout-all"], input="N\n")
+    assert result.exit_code == 0
+    assert "cancelled" in result.output.lower()
+    mock_auth_mgr.logout_all.assert_not_called()
 
 
 @patch("limitwatch.cli.Config")
