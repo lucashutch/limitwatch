@@ -116,23 +116,76 @@ def _non_interactive_login(provider):
     return client.provider.login()
 
 
-def _handle_logout(display, auth_mgr, email, json_output):
-    """Handle the --logout flow."""
-    success = auth_mgr.logout(email)
-    if json_output:
-        _output_json_msg("success" if success else "not_found")
-    elif success:
+def _interactive_logout(display, auth_mgr):
+    """Interactive logout flow: pick provider → pick account → confirm."""
+    accounts = auth_mgr.accounts
+    if not accounts:
+        display.console.print("[yellow]No accounts found to log out from.[/yellow]")
+        return
+
+    # Step 1: Provider selection — only show providers that have accounts
+    all_providers = QuotaClient.get_available_providers()
+    present_types = {a.get("type") for a in accounts}
+    available_providers = {k: v for k, v in all_providers.items() if k in present_types}
+
+    display.console.print("[bold blue]Select Provider to log out from:[/bold blue]")
+    p_types = list(available_providers.keys())
+    for i, p_type in enumerate(p_types, 1):
+        count = sum(1 for a in accounts if a.get("type") == p_type)
         display.console.print(
-            f"[green]Successfully logged out [bold]{email}[/bold][/green]"
+            f"{i}) {available_providers[p_type]} "
+            f"({count} account{'s' if count > 1 else ''})"
         )
+
+    choice = click.prompt("Enter choice", type=int, default=1)
+    if choice < 1 or choice > len(p_types):
+        display.console.print("[red]Invalid choice.[/red]")
+        return
+    chosen_type = p_types[choice - 1]
+
+    # Step 2: Account selection
+    provider_accounts = [a for a in accounts if a.get("type") == chosen_type]
+    if len(provider_accounts) == 1:
+        chosen_account = provider_accounts[0]
     else:
-        display.console.print(
-            f"[yellow]Account [bold]{email}[/bold] not found.[/yellow]"
-        )
+        display.console.print("[bold blue]Select Account to log out:[/bold blue]")
+        for i, acc in enumerate(provider_accounts, 1):
+            label = acc.get("alias") or acc.get("email", f"Account {i}")
+            display.console.print(f"{i}) {label}")
+        acc_choice = click.prompt("Enter choice", type=int, default=1)
+        if acc_choice < 1 or acc_choice > len(provider_accounts):
+            display.console.print("[red]Invalid choice.[/red]")
+            return
+        chosen_account = provider_accounts[acc_choice - 1]
+
+    # Step 3: Confirmation
+    email = chosen_account.get("email", "")
+    alias = chosen_account.get("alias", "")
+    label = alias or email
+    if not click.confirm(f"Log out {label}?", default=False):
+        display.console.print("[yellow]Logout cancelled.[/yellow]")
+        return
+
+    # Step 4: Execute
+    auth_mgr.logout(email)
+    display.console.print(
+        f"[green]Successfully logged out [bold]{label}[/bold][/green]"
+    )
 
 
 def _handle_logout_all(display, auth_mgr, json_output):
     """Handle the --logout-all flow."""
+    if not json_output:
+        count = len(auth_mgr.accounts)
+        if count == 0:
+            display.console.print("[yellow]No accounts to log out from.[/yellow]")
+            return
+        if not click.confirm(
+            f"Log out from all {count} account{'s' if count > 1 else ''}?",
+            default=False,
+        ):
+            display.console.print("[yellow]Logout cancelled.[/yellow]")
+            return
     auth_mgr.logout_all()
     if json_output:
         _output_json_msg("success")
@@ -356,7 +409,9 @@ def _build_json_results(indices_to_check, idx_to_result, display, show_all, quer
 @click.option(
     "--project-id", help="Manually specify a Google Cloud Project ID for an account."
 )
-@click.option("--logout", help="Logout from a specific account.")
+@click.option(
+    "--logout", is_flag=True, help="Log out from a saved account interactively."
+)
 @click.option("--logout-all", is_flag=True, help="Logout from all accounts.")
 @click.option("--verbose", is_flag=True, help="Enable verbose logging.")
 def main(
@@ -389,7 +444,7 @@ def main(
         return
 
     if logout:
-        _handle_logout(display, auth_mgr, logout, json_output)
+        _interactive_logout(display, auth_mgr)
         return
 
     if logout_all:
