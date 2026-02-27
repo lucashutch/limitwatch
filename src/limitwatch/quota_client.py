@@ -41,6 +41,11 @@ class QuotaClient:
         """
         return self.provider.fetch_quotas()
 
+    def set_deadline(self, deadline: Optional[float]) -> None:
+        """Set an absolute perf_counter deadline for provider work."""
+        if hasattr(self.provider, "set_deadline"):
+            self.provider.set_deadline(deadline)
+
     def filter_quotas(
         self, quotas: List[Dict[str, Any]], show_all: bool
     ) -> List[Dict[str, Any]]:
