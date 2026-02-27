@@ -1,10 +1,38 @@
-from typing import List, Dict, Any, Tuple
+import time
+from typing import List, Dict, Any, Tuple, Optional
 from abc import ABC, abstractmethod
 
 
 class BaseProvider(ABC):
     def __init__(self, account_data: Dict[str, Any]):
         self.account_data = account_data
+        self._timings: List[Dict[str, Any]] = []
+        self._deadline: Optional[float] = None
+
+    def record_timing(self, name: str, elapsed_ms: float, **meta: Any) -> None:
+        entry = {"name": name, "elapsed_ms": elapsed_ms}
+        entry.update(meta)
+        self._timings.append(entry)
+
+    @property
+    def timings(self) -> List[Dict[str, Any]]:
+        return list(self._timings)
+
+    def set_deadline(self, deadline: Optional[float]) -> None:
+        self._deadline = deadline
+
+    def time_remaining(self, default_timeout: float) -> float:
+        if self._deadline is None:
+            return default_timeout
+        remaining = self._deadline - time.perf_counter()
+        if remaining <= 0:
+            return 0.0
+        return min(default_timeout, remaining)
+
+    def has_time_remaining(self) -> bool:
+        if self._deadline is None:
+            return True
+        return (self._deadline - time.perf_counter()) > 0
 
     @abstractmethod
     def fetch_quotas(self) -> List[Dict[str, Any]]:
