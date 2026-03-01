@@ -360,6 +360,16 @@ def _build_timeout_result(idx, acc_data, auth_mgr, cache_ttl, show_start):
     return email, quotas, client, error, timings
 
 
+def _normalize_fetch_result(result):
+    if isinstance(result, (list, tuple)):
+        if len(result) == 4:
+            email, quotas, client, error = result
+            return email, quotas, client, error, []
+        if len(result) == 5:
+            return result
+    return result
+
+
 def _fetch_all_quotas(
     indices_to_check,
     auth_mgr,
@@ -401,7 +411,7 @@ def _fetch_all_quotas(
 
             for future in done:
                 idx = future_to_idx[future]
-                idx_to_result[idx] = future.result()
+                idx_to_result[idx] = _normalize_fetch_result(future.result())
 
             for future in not_done:
                 idx = future_to_idx[future]
