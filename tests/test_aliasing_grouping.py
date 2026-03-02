@@ -52,7 +52,7 @@ def test_cli_filter_by_group(mock_fetch, mock_auth_mgr_cls, mock_config_cls):
         {"email": "home@example.com", "group": "home"},
     ]
 
-    mock_fetch.return_value = ("test", [], MagicMock(), None)
+    mock_fetch.return_value = ("test", [], MagicMock(), None, [])
 
     runner = CliRunner()
     result = runner.invoke(main, ["show", "-g", "work"])
@@ -78,7 +78,7 @@ def test_cli_display_alias_and_group(mock_fetch, mock_auth_mgr_cls, mock_config_
 
     mock_client = MagicMock()
     mock_client.provider.provider_name = "Google"
-    mock_fetch.return_value = ("test@example.com", [], mock_client, None)
+    mock_fetch.return_value = ("test@example.com", [], mock_client, None, [])
 
     runner = CliRunner()
     result = runner.invoke(main, ["show"])
