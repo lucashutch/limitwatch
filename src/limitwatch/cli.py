@@ -12,6 +12,7 @@ from .quota_client import QuotaClient
 from .display import DisplayManager
 from .history import HistoryManager
 from .export import Exporter
+from . import completions
 
 logger = logging.getLogger(__name__)
 
@@ -292,13 +293,23 @@ def _handle_metadata_update(
 
 def _filter_accounts(accounts, account, provider, group):
     """Filter the accounts list based on CLI flags. Returns list of (index, account_data)."""
+    # Convert tuples to sets for efficient lookup
+    account_set = set(account) if account else None
+    provider_set = set(provider) if provider else None
+
     indices = []
     for i, a in enumerate(accounts):
-        if account and a.get("email") != account and a.get("alias") != account:
-            continue
-        if provider and a.get("type", "google") != provider:
-            continue
-        if group and not account and a.get("group") != group:
+        if account_set:
+            # Check if account email or alias matches any of the provided values
+            email = a.get("email", "")
+            alias = a.get("alias", "")
+            if email not in account_set and alias not in account_set:
+                continue
+        if provider_set:
+            # Check if provider type matches any of the provided values
+            if a.get("type", "google") not in provider_set:
+                continue
+        if group and not account_set and a.get("group") != group:
             continue
         indices.append((i, a))
     return indices
@@ -552,28 +563,134 @@ def _build_json_results(
     invoke_without_command=True,
 )
 @click.version_option(__version__, "--version", "-v", prog_name="limitwatch")
-@click.pass_context
-def cli(ctx):
-    """Monitor API quota usage and reset times across all accounts."""
-    ctx.ensure_object(dict)
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(show)
-
-
-@cli.command(name="show")
-@click.option("-a", "--account", help="Email of the account to check.")
+@click.option(
+    "-a",
+    "--account",
+    multiple=True,
+    help="Email of the account to check. Can be specified multiple times.",
+    shell_complete=completions.complete_accounts,
+)
 @click.option("--alias", help="Set an alias for an account (requires --account).")
 @click.option(
     "-g",
     "--group",
     help="Filter by group or set a group for an account (setting requires --account).",
+    shell_complete=completions.complete_groups,
 )
-@click.option("-p", "--provider", help="Filter by provider (e.g., google, chutes).")
+@click.option(
+    "-p",
+    "--provider",
+    multiple=True,
+    help="Filter by provider (e.g., google, chutes). Can be specified multiple times.",
+    shell_complete=completions.complete_providers,
+)
 @click.option(
     "-q",
     "--query",
     multiple=True,
     help="Filter models by name (case-insensitive). Can be specified multiple times for an AND match.",
+    shell_complete=completions.complete_quota_names,
+)
+@click.option("-r", "--refresh", is_flag=True, help="Force refresh of OAuth tokens.")
+@click.option(
+    "-s", "--show-all", is_flag=True, help="Show all models including Gemini 2.0/2.5."
+)
+@click.option(
+    "-c", "--compact", is_flag=True, help="Enable compact one-line-per-quota view."
+)
+@click.option(
+    "-j", "--json", "json_output", is_flag=True, help="Output results as JSON."
+)
+@click.option("-l", "--login", is_flag=True, help="Login to a new account.")
+@click.option(
+    "--project-id", help="Manually specify a Google Cloud Project ID for an account."
+)
+@click.option(
+    "--logout", is_flag=True, help="Log out from a saved account interactively."
+)
+@click.option("--logout-all", is_flag=True, help="Logout from all accounts.")
+@click.option(
+    "--no-record", is_flag=True, help="Skip recording quota data to history database."
+)
+@click.option("--verbose", is_flag=True, help="Enable verbose logging.")
+@click.option(
+    "--timings",
+    is_flag=True,
+    help="Include provider timing details in JSON output.",
+)
+@click.pass_context
+def cli(
+    ctx,
+    account,
+    alias,
+    group,
+    provider,
+    query,
+    refresh,
+    show_all,
+    compact,
+    json_output,
+    login,
+    project_id,
+    logout,
+    logout_all,
+    no_record,
+    verbose,
+    timings,
+):
+    """Monitor API quota usage and reset times across all accounts."""
+    ctx.ensure_object(dict)
+    if ctx.invoked_subcommand is None:
+        # Forward all options to the show command
+        ctx.forward(
+            show,
+            account=account,
+            alias=alias,
+            group=group,
+            provider=provider,
+            query=query,
+            refresh=refresh,
+            show_all=show_all,
+            compact=compact,
+            json_output=json_output,
+            login=login,
+            project_id=project_id,
+            logout=logout,
+            logout_all=logout_all,
+            no_record=no_record,
+            verbose=verbose,
+            timings=timings,
+        )
+
+
+@cli.command(name="show")
+@click.option(
+    "-a",
+    "--account",
+    multiple=True,
+    help="Email of the account to check. Can be specified multiple times.",
+    shell_complete=completions.complete_accounts,
+)
+@click.option("--alias", help="Set an alias for an account (requires --account).")
+@click.option(
+    "-g",
+    "--group",
+    help="Filter by group or set a group for an account (setting requires --account).",
+    shell_complete=completions.complete_groups,
+)
+@click.option(
+    "-p",
+    "--provider",
+    multiple=True,
+    help="Filter by provider (e.g., google, chutes). Can be specified multiple times.",
+    shell_complete=completions.complete_providers,
+)
+@click.option(
+    "-q",
+    "--query",
+    multiple=True,
+    help="Filter models by name (case-insensitive). Can be specified multiple times for an AND match.",
+    shell_complete=completions.complete_quota_names,
 )
 @click.option("-r", "--refresh", is_flag=True, help="Force refresh of OAuth tokens.")
 @click.option(
@@ -664,19 +781,37 @@ def show(
             return
 
         # --- Metadata update ---
-        if account and (
-            alias is not None or group is not None or project_id is not None
+        # Metadata update only works with a single account
+        if (
+            account
+            and len(account) == 1
+            and (alias is not None or group is not None or project_id is not None)
         ):
             _handle_metadata_update(
                 display,
                 auth_mgr,
                 accounts,
-                account,
+                account[0],
                 alias,
                 group,
                 project_id,
                 json_output,
             )
+            return
+        elif (
+            account
+            and len(account) > 1
+            and (alias is not None or group is not None or project_id is not None)
+        ):
+            if json_output:
+                _output_json_msg(
+                    "error", message="Metadata update requires a single account"
+                )
+            else:
+                display.console.print(
+                    "[red]Error:[/red] Cannot update metadata for multiple accounts at once. "
+                    "Please specify a single account with --account."
+                )
             return
 
         # --- Filter & fetch ---
@@ -686,8 +821,11 @@ def show(
             if json_output:
                 _output_json_msg("error", message="No accounts found")
             elif account:
+                account_list = (
+                    ", ".join(account) if isinstance(account, tuple) else account
+                )
                 display.console.print(
-                    f"[red]Error:[/red] Account [bold]{account}[/bold] not found."
+                    f"[red]Error:[/red] Account [bold]{account_list}[/bold] not found."
                 )
             else:
                 display.console.print("[red]Error:[/red] No accounts matching filters.")
@@ -764,12 +902,28 @@ def show(
     "--preset",
     type=click.Choice(["24h", "7d", "30d", "90d"]),
     help="Time range preset (default: 24h)",
+    shell_complete=completions.complete_preset_ranges,
 )
 @click.option("--since", help="Start time (ISO format or relative like '7d', '24h')")
 @click.option("--until", help="End time (ISO format)")
-@click.option("-a", "--account", help="Filter by account email")
-@click.option("-p", "--provider", help="Filter by provider type")
-@click.option("-q", "--quota", help="Filter by quota name")
+@click.option(
+    "-a",
+    "--account",
+    help="Filter by account email",
+    shell_complete=completions.complete_accounts,
+)
+@click.option(
+    "-p",
+    "--provider",
+    help="Filter by provider type",
+    shell_complete=completions.complete_providers,
+)
+@click.option(
+    "-q",
+    "--quota",
+    help="Filter by quota name",
+    shell_complete=completions.complete_quota_names,
+)
 @click.option(
     "--table", is_flag=True, help="Show time-series table instead of sparklines"
 )
@@ -886,18 +1040,35 @@ def history_command(
     type=click.Choice(["csv", "markdown"]),
     default="csv",
     help="Export format (default: csv)",
+    shell_complete=completions.complete_export_formats,
 )
 @click.option("-o", "--output", help="Output file path (default: stdout)")
 @click.option(
     "--preset",
     type=click.Choice(["24h", "7d", "30d", "90d"]),
     help="Time range preset",
+    shell_complete=completions.complete_preset_ranges,
 )
 @click.option("--since", help="Start time (ISO format or relative like '7d', '24h')")
 @click.option("--until", help="End time (ISO format)")
-@click.option("-a", "--account", help="Filter by account email")
-@click.option("-p", "--provider", help="Filter by provider type")
-@click.option("-q", "--quota", help="Filter by quota name")
+@click.option(
+    "-a",
+    "--account",
+    help="Filter by account email",
+    shell_complete=completions.complete_accounts,
+)
+@click.option(
+    "-p",
+    "--provider",
+    help="Filter by provider type",
+    shell_complete=completions.complete_providers,
+)
+@click.option(
+    "-q",
+    "--quota",
+    help="Filter by quota name",
+    shell_complete=completions.complete_quota_names,
+)
 @click.option("--verbose", is_flag=True, help="Enable verbose logging")
 def export_command(
     export_format, output, preset, since, until, account, provider, quota, verbose
@@ -944,6 +1115,40 @@ def export_command(
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
+
+
+@cli.command(name="completion")
+@click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
+def completion_command(shell):
+    """Generate shell completion script.
+
+    Add to your shell configuration:
+
+    \b
+    Bash (~/.bashrc):
+      eval "$(limitwatch completion bash)"
+
+    \b
+    Zsh (~/.zshrc):
+      eval "$(limitwatch completion zsh)"
+
+    \b
+    Fish (~/.config/fish/config.fish):
+      limitwatch completion fish | source
+    """
+    from click.shell_completion import BashComplete, ZshComplete, FishComplete
+
+    # Map shell names to completion classes
+    classes = {
+        "bash": BashComplete,
+        "zsh": ZshComplete,
+        "fish": FishComplete,
+    }
+
+    complete_class = classes.get(shell)
+    if complete_class:
+        complete = complete_class(cli, {}, "limitwatch", "_LIMITWATCH_COMPLETE")
+        click.echo(complete.source())
 
 
 # Default command is "show"
