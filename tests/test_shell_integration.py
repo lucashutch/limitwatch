@@ -122,7 +122,7 @@ def test_cli_provider_filter(mock_auth_mgr_cls, mock_config_cls):
     ]
 
     with patch("limitwatch.cli.fetch_account_data") as mock_fetch:
-        mock_fetch.return_value = ("test", [], MagicMock(), None)
+        mock_fetch.return_value = ("test", [], MagicMock(), None, [])
 
         runner = CliRunner()
         runner.invoke(main, ["show", "--provider", "chutes"])

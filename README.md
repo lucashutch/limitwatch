@@ -14,6 +14,7 @@ A Python CLI tool to monitor quota usage, reset times, and credits across **Goog
 - **🧠 Smart model selection**: Prioritizes primary premium models by default while preserving useful fallbacks.
 - **🧾 Multiple output modes**: Standard view, compact view (`--compact`), and script-friendly JSON (`--json`).
 - **🧱 Modular provider architecture**: Providers are isolated and extensible through the shared base interface.
+- **🐚 Shell autocompletions**: Tab-complete account names, providers, aliases, and more with bash, zsh, and fish support.
 
 ## Supported Providers & Authentication
 
@@ -50,6 +51,12 @@ limitwatch --login
 
 # View your quotas
 limitwatch
+
+# Filter by specific providers (can specify multiple)
+limitwatch --provider google --provider openai
+
+# Filter by specific accounts (can specify multiple)
+limitwatch --account user1@gmail.com --account user2@gmail.com
 ```
 
 ### Example Output
@@ -83,6 +90,49 @@ Credits: $6.73 remaining
 
 The tool stores configuration and account data in:
 `~/.config/limitwatch/accounts.json`
+
+## Shell Autocompletions
+
+LimitWatch supports dynamic tab-completion for bash, zsh, and fish shells. Completions work for account names, aliases, providers, groups, quota names, and more.
+
+### Setup
+
+Add the appropriate line to your shell configuration file:
+
+**Bash** (`~/.bashrc`):
+```bash
+eval "$(limitwatch completion bash)"
+```
+
+**Zsh** (`~/.zshrc`):
+```zsh
+eval "$(limitwatch completion zsh)"
+```
+
+**Fish** (`~/.config/fish/config.fish`):
+```fish
+limitwatch completion fish | source
+```
+
+After adding the line, reload your shell configuration or restart your terminal.
+
+### Usage Examples
+
+Once configured, you can use tab completion:
+
+```bash
+# Complete account names and aliases
+limitwatch --account <TAB>
+
+# Complete provider types  
+limitwatch --provider <TAB>
+
+# Complete group names
+limitwatch --group <TAB>
+
+# Complete quota/model names when filtering
+limitwatch --query <TAB>
+```
 
 ## Development
 

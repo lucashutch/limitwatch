@@ -8,7 +8,6 @@
 - Z.AI
 - Together AI / Fireworks
 - Opencode Zen (credits billing + active Go/Black subscription, waiting for API access)
-- Chutes: expand to support credits balance as well as subscription usage
 
 ### New Features
 1. **Historical Quota Tracking** - Store quota usage over time in a local SQLite database with trend visualization and usage patterns
