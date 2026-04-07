@@ -64,8 +64,8 @@ def _build_personal_quota(remaining_pct, used_pct, reset, **extras) -> Dict[str,
 
 
 PERSONAL_PLANS = {"individual", "individual_pro", "pro", "pro+"}
-DEFAULT_API_TIMEOUT = 2
-DEFAULT_GH_CLI_TIMEOUT = 3
+DEFAULT_API_TIMEOUT = 4
+DEFAULT_GH_CLI_TIMEOUT = 6
 ENABLE_GH_CLI_FALLBACK_DEFAULT = False
 
 

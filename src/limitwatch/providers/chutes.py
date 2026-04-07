@@ -58,7 +58,7 @@ def _make_chutes_headers(api_key: str) -> Dict[str, str]:
 
 class ChutesProvider(BaseProvider):
     BASE_URL = "https://api.chutes.ai"
-    FETCH_TIMEOUT = 1.5
+    FETCH_TIMEOUT = 3.0
 
     def __init__(self, account_data: Dict[str, Any]):
         super().__init__(account_data)

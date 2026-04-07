@@ -842,7 +842,7 @@ def show(
             json_output,
             refresh,
             config.cache_ttl,
-            2000,
+            4000,
         )
 
         if idx_to_result:
