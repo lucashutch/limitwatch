@@ -10,9 +10,7 @@
 - Opencode Zen (credits billing + active Go/Black subscription, waiting for API access)
 
 ### New Features
-1. **Historical Quota Tracking** - Store quota usage over time in a local SQLite database with trend visualization and usage patterns
-3. **Export Functionality** - Export historical quota data to CSV, Excel, or Markdown formats with customizable date ranges and filters
-4. **Shell Autocompletions** - Generate shell completion scripts for bash/zsh/fish with account names, providers, and aliases
+1. **Historical Quota Tracking** - Improve formatting data visualization and analysis for historical quota usage trends.
 
 ### Improvements
 - Add configuration schema validation for accounts.json and config.json with migration support for breaking changes

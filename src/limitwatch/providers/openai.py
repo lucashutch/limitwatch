@@ -35,8 +35,8 @@ USER_INFO_URL = f"{CHATGPT_BACKEND}/me"  # Endpoint to fetch user profile
 OPENCODE_AUTH_PATH = Path.home() / ".local" / "share" / "opencode" / "auth.json"
 CODEX_CLI_AUTH_PATH = Path.home() / ".codex" / "auth.json"
 
-DEFAULT_TIMEOUT = 10
-FETCH_TIMEOUT = 2.5
+DEFAULT_TIMEOUT = 20
+FETCH_TIMEOUT = 5.0
 DEVICE_POLL_TIMEOUT = 900  # 15 minutes
 
 
