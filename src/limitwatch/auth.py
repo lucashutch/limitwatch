@@ -81,12 +81,27 @@ class AuthManager:
         if not email or not provider_type:
             raise Exception("Account data missing email or type")
 
+        account_identity = (
+            account_data.get("github_account")
+            if provider_type == "github_copilot"
+            else None
+        )
+        if not account_identity:
+            account_identity = email
+
         # Update or add account
         existing_acc = next(
             (
                 a
                 for a in self.accounts
-                if a.get("email") == email and a.get("type") == provider_type
+                if a.get("type") == provider_type
+                and (
+                    (
+                        provider_type == "github_copilot"
+                        and a.get("github_account") == account_identity
+                    )
+                    or (provider_type != "github_copilot" and a.get("email") == email)
+                )
             ),
             None,
         )

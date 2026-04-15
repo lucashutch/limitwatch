@@ -174,6 +174,59 @@ def test_auth_manager_login_update_existing(tmp_path):
     assert auth_mgr.accounts[0]["refreshToken"] == "new"
 
 
+def test_auth_manager_login_keeps_separate_github_copilot_accounts(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+
+    auth_mgr.login(
+        {
+            "email": "dummy-user-a",
+            "type": "github_copilot",
+            "github_account": "dummy-user-a",
+            "githubToken": "token-a",
+        }
+    )
+    auth_mgr.login(
+        {
+            "email": "dummy-user-b",
+            "type": "github_copilot",
+            "github_account": "dummy-user-b",
+            "githubToken": "token-b",
+        }
+    )
+
+    assert len(auth_mgr.accounts) == 2
+    assert {acc["github_account"] for acc in auth_mgr.accounts} == {
+        "dummy-user-a",
+        "dummy-user-b",
+    }
+
+
+def test_auth_manager_login_updates_same_github_copilot_account(tmp_path):
+    auth_file = tmp_path / "accounts.json"
+    auth_mgr = AuthManager(auth_file)
+
+    auth_mgr.login(
+        {
+            "email": "dummy-user-a",
+            "type": "github_copilot",
+            "github_account": "dummy-user-a",
+            "githubToken": "token-a",
+        }
+    )
+    auth_mgr.login(
+        {
+            "email": "dummy-user-a",
+            "type": "github_copilot",
+            "github_account": "dummy-user-a",
+            "githubToken": "token-b",
+        }
+    )
+
+    assert len(auth_mgr.accounts) == 1
+    assert auth_mgr.accounts[0]["githubToken"] == "token-b"
+
+
 def test_auth_manager_update_metadata(tmp_path):
     auth_file = tmp_path / "accounts.json"
     auth_mgr = AuthManager(auth_file)

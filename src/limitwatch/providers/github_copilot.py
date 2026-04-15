@@ -3,6 +3,7 @@ import requests
 import concurrent.futures
 import logging
 import time
+import re
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Tuple, Optional
 from .base import BaseProvider
@@ -67,6 +68,7 @@ PERSONAL_PLANS = {"individual", "individual_pro", "pro", "pro+"}
 DEFAULT_API_TIMEOUT = 4
 DEFAULT_GH_CLI_TIMEOUT = 6
 ENABLE_GH_CLI_FALLBACK_DEFAULT = False
+GH_AUTH_STATUS_TIMEOUT = 6
 
 
 class GitHubCopilotProvider(BaseProvider):
@@ -100,11 +102,16 @@ class GitHubCopilotProvider(BaseProvider):
     def interactive_login(self, display_manager: Any) -> Dict[str, Any]:
         """Perform an interactive login flow with the user."""
 
-        token = self._prompt_for_token(display_manager)
+        token, token_source, github_account = self._prompt_for_token(display_manager)
         org = self._prompt_for_org(display_manager, token)
-        return self.login(token=token, organization=org)
+        return self.login(
+            token=token,
+            organization=org,
+            token_source=token_source,
+            github_account=github_account,
+        )
 
-    def _prompt_for_token(self, display_manager) -> str:
+    def _prompt_for_token(self, display_manager) -> Tuple[str, str, Optional[str]]:
         """Try gh CLI token first, then prompt user."""
         import click
 
@@ -112,14 +119,30 @@ class GitHubCopilotProvider(BaseProvider):
             token = self._get_gh_token()
             if token:
                 display_manager.console.print("[green]✓ GitHub CLI token found[/green]")
-                return token
+                github_account = None
+                gh_accounts = self._discover_gh_accounts()
+                if len(gh_accounts) > 1:
+                    github_account = self._select_gh_account_from_list(
+                        display_manager, gh_accounts
+                    )
+                    if not github_account:
+                        raise Exception("A GitHub account selection is required")
+                    selected_token = self._get_gh_token_for_user(github_account)
+                    if not selected_token:
+                        raise Exception(
+                            f"GitHub CLI token unavailable for account {github_account}"
+                        )
+                    token = selected_token
+                elif len(gh_accounts) == 1:
+                    github_account = gh_accounts[0]
+                return token, "gh_cli", github_account
             display_manager.console.print(
                 "[yellow]⚠ Could not load GitHub CLI token[/yellow]"
             )
             token = click.prompt("Enter GitHub token (or press Enter to skip)")
             if not token:
                 raise Exception("GitHub token is required")
-            return token
+            return token, "manual", None
         except Exception as e:
             display_manager.console.print(f"[yellow]Error loading token: {e}[/yellow]")
             raise
@@ -173,6 +196,26 @@ class GitHubCopilotProvider(BaseProvider):
             return orgs[choice - 1]
         return None
 
+    @staticmethod
+    def _select_gh_account_from_list(display_manager, accounts: list) -> Optional[str]:
+        """Display gh account list and let user pick one."""
+        import click
+
+        display_manager.console.print(
+            "\n[bold blue]Select a GitHub account:[/bold blue]"
+        )
+        for i, account in enumerate(accounts, 1):
+            display_manager.console.print(f"{i}) {account}")
+
+        choice = click.prompt("Enter choice", default=1)
+        try:
+            choice = int(choice)
+        except (TypeError, ValueError):
+            choice = 0
+        if 1 <= choice <= len(accounts):
+            return accounts[choice - 1]
+        return None
+
     def _discover_organizations(self, token: str) -> list:
         """Discover organizations the user has access to."""
         headers = _make_github_headers(token)
@@ -203,6 +246,8 @@ class GitHubCopilotProvider(BaseProvider):
         """Perform GitHub login and return account data."""
         token = kwargs.get("token")
         organization = kwargs.get("organization")
+        token_source = kwargs.get("token_source", "manual")
+        github_account = kwargs.get("github_account")
 
         if not token:
             raise Exception("GitHub token is required for GitHub Copilot login")
@@ -217,6 +262,11 @@ class GitHubCopilotProvider(BaseProvider):
         }
         if organization:
             account_data["organization"] = organization
+        if github_account:
+            account_data["github_account"] = github_account
+
+        if token_source == "gh_cli":
+            account_data["githubAuthSource"] = "gh_cli"
         return account_data
 
     @staticmethod
@@ -251,11 +301,51 @@ class GitHubCopilotProvider(BaseProvider):
             pass
         return None
 
+    def _discover_gh_accounts(self) -> List[str]:
+        """Discover all logged-in GitHub CLI accounts for github.com."""
+        try:
+            result = subprocess.run(
+                ["gh", "auth", "status"],
+                capture_output=True,
+                text=True,
+                timeout=GH_AUTH_STATUS_TIMEOUT,
+            )
+            if result.returncode != 0:
+                return []
+
+            accounts = []
+            pattern = re.compile(r"Logged in to github\.com account\s+([^\s(]+)")
+            for line in result.stdout.splitlines():
+                match = pattern.search(line)
+                if match:
+                    accounts.append(match.group(1))
+            return accounts
+        except Exception:
+            return []
+
+    def _get_gh_token_for_user(self, user: str) -> Optional[str]:
+        """Attempt to retrieve a GitHub CLI token for a specific account."""
+        try:
+            result = subprocess.run(
+                ["gh", "auth", "token", "--user", user],
+                capture_output=True,
+                text=True,
+                timeout=DEFAULT_GH_CLI_TIMEOUT,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+            pass
+        return None
+
     def fetch_quotas(self) -> List[Dict[str, Any]]:
         """Fetch Copilot quotas for personal and org."""
         if not self.github_token:
             return []
 
+        return self._fetch_single_account_quotas()
+
+    def _fetch_single_account_quotas(self) -> List[Dict[str, Any]]:
         start = time.perf_counter()
         email = self.account_data.get("email", "unknown")
         logger.debug(
