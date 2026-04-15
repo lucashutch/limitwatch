@@ -16,7 +16,7 @@ from .base import BaseProvider
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://openrouter.ai/api/v1"
-FETCH_TIMEOUT = 2
+FETCH_TIMEOUT = 4
 
 
 def _make_headers(api_key: str) -> Dict[str, str]:

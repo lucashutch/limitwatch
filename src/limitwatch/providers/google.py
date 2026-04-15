@@ -79,7 +79,7 @@ LOAD_CODE_ASSIST_ENDPOINTS = [
     "https://autopush-cloudcode-pa.sandbox.googleapis.com",
 ]
 
-DEFAULT_QUOTA_TIMEOUT = 2.0
+DEFAULT_QUOTA_TIMEOUT = 4.0
 
 
 def classify_cli_model(model_id: str) -> Optional[str]:
