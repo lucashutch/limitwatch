@@ -332,7 +332,7 @@ class DisplayManager:
         short_indicator = client.short_indicator if client else "?"
         provider_color = client.primary_color if client else "white"
 
-        # Compact account name: drop any leading "owner: " prefix (e.g. "lucashutch: Myriota" -> "Myriota")
+        # Compact account name: drop any leading "owner: " prefix (e.g. "dummy-user: example-org" -> "example-org")
         display_account = account_name or ""
         if isinstance(display_account, str) and ": " in display_account:
             display_account = display_account.split(": ", 1)[1]

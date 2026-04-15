@@ -91,10 +91,14 @@ def test_quota_client_delegation():
 def test_quota_client_github_copilot(mock_get):
     """Test QuotaClient with GitHub Copilot provider."""
     mock_get.return_value.status_code = 200
-    mock_get.return_value.json.return_value = {"login": "testuser"}
+    mock_get.return_value.json.return_value = {"login": "dummy-user-a"}
 
     client = QuotaClient(
-        {"type": "github_copilot", "githubToken": "fake-token", "email": "testuser"}
+        {
+            "type": "github_copilot",
+            "githubToken": "fake-token",
+            "email": "dummy-user-a",
+        }
     )
     assert client.provider.provider_name == "GitHub Copilot"
     quotas = client.fetch_quotas()

@@ -14,13 +14,13 @@ from limitwatch.providers.github_copilot import (
 def test_github_copilot_provider_login(mock_get):
     """Test GitHub Copilot provider login with token."""
     mock_get.return_value.status_code = 200
-    mock_get.return_value.json.return_value = {"login": "testuser"}
+    mock_get.return_value.json.return_value = {"login": "dummy-user-a"}
 
     provider = GitHubCopilotProvider({})
     account_data = provider.login(token="fake-token")
 
     assert account_data["type"] == "github_copilot"
-    assert account_data["email"] == "testuser"
+    assert account_data["email"] == "dummy-user-a"
     assert account_data["githubToken"] == "fake-token"
     assert "GITHUB_COPILOT" in account_data["services"]
 
@@ -29,12 +29,12 @@ def test_github_copilot_provider_login(mock_get):
 def test_github_copilot_provider_login_with_org(mock_get):
     """Test GitHub Copilot provider login with organization."""
     mock_get.return_value.status_code = 200
-    mock_get.return_value.json.return_value = {"login": "testuser"}
+    mock_get.return_value.json.return_value = {"login": "dummy-user-a"}
 
     provider = GitHubCopilotProvider({})
-    account_data = provider.login(token="fake-token", organization="myorg")
+    account_data = provider.login(token="fake-token", organization="dummy-org")
 
-    assert account_data["organization"] == "myorg"
+    assert account_data["organization"] == "dummy-org"
 
 
 @patch("limitwatch.providers.github_copilot.requests.get")
@@ -59,7 +59,7 @@ def test_github_copilot_provider_fetch_personal_quota(mock_get):
     """Test fetching personal Copilot quota from user endpoint."""
     account_data = {
         "type": "github_copilot",
-        "email": "testuser",
+        "email": "dummy-user-a",
         "githubToken": "fake-token",
     }
     provider = GitHubCopilotProvider(account_data)
@@ -87,9 +87,9 @@ def test_github_copilot_provider_fetch_org_quota(mock_get):
     """Test fetching org Copilot quota."""
     account_data = {
         "type": "github_copilot",
-        "email": "testuser",
+        "email": "dummy-user-a",
         "githubToken": "fake-token",
-        "organization": "myorg",
+        "organization": "dummy-org",
     }
     provider = GitHubCopilotProvider(account_data)
 
@@ -116,7 +116,7 @@ def test_github_copilot_provider_fetch_org_quota(mock_get):
 
     # Should have both personal and org quota
     assert len(quotas) == 2
-    org_quota = [q for q in quotas if "myorg" in q.get("display_name", "")][0]
+    org_quota = [q for q in quotas if "dummy-org" in q.get("display_name", "")][0]
     assert org_quota["remaining_pct"] == 30.0  # (10 - 7) / 10 = 0.3 = 30%
     assert org_quota["remaining"] == 3
     assert org_quota["limit"] == 10
@@ -127,9 +127,9 @@ def test_github_copilot_provider_fetch_org_quota_error(mock_get):
     """Test org quota fetch error handling."""
     account_data = {
         "type": "github_copilot",
-        "email": "testuser",
+        "email": "dummy-user-a",
         "githubToken": "fake-token",
-        "organization": "myorg",
+        "organization": "dummy-org",
     }
     provider = GitHubCopilotProvider(account_data)
 
@@ -150,7 +150,7 @@ def test_github_copilot_provider_fetch_org_quota_error(mock_get):
     # Should include error quota
     error_quotas = [q for q in quotas if q.get("is_error")]
     assert len(error_quotas) > 0
-    assert "myorg" in error_quotas[0].get("display_name", "")
+    assert "dummy-org" in error_quotas[0].get("display_name", "")
 
 
 def test_github_copilot_provider_properties():
@@ -168,7 +168,7 @@ def test_github_copilot_provider_filter_quotas():
     provider = GitHubCopilotProvider({})
     quotas = [
         {"display_name": "Copilot: Personal (Available)"},
-        {"display_name": "Copilot: myorg (active)"},
+        {"display_name": "Copilot: dummy-org (active)"},
     ]
 
     filtered = provider.filter_quotas(quotas, show_all=False)
@@ -180,7 +180,7 @@ def test_github_copilot_provider_sort_key():
     provider = GitHubCopilotProvider({})
 
     personal_quota = {"display_name": "Copilot: Personal (Available)"}
-    org_quota = {"display_name": "Copilot: myorg (active)"}
+    org_quota = {"display_name": "Copilot: dummy-org (active)"}
 
     personal_key = provider.get_sort_key(personal_quota)
     org_key = provider.get_sort_key(org_quota)
@@ -215,14 +215,32 @@ def test_github_copilot_provider_get_gh_token_failure(mock_run):
     assert token is None
 
 
+@patch("limitwatch.providers.github_copilot.subprocess.run")
+def test_github_copilot_provider_discover_gh_accounts(mock_run):
+    """Test discovering all logged-in gh accounts."""
+    mock_run.return_value.returncode = 0
+    mock_run.return_value.stdout = (
+        "github.com\n"
+        "  ✓ Logged in to github.com account dummy-user-a (keyring)\n"
+        "  - Active account: true\n"
+        "  ✓ Logged in to github.com account dummy-user-b (keyring)\n"
+        "  - Active account: false\n"
+    )
+
+    provider = GitHubCopilotProvider({})
+    accounts = provider._discover_gh_accounts()
+
+    assert accounts == ["dummy-user-a", "dummy-user-b"]
+
+
 @patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_org_404_error(mock_get):
     """Test org quota fetch 404 error (Copilot not enabled)."""
     account_data = {
         "type": "github_copilot",
-        "email": "testuser",
+        "email": "dummy-user-a",
         "githubToken": "fake-token",
-        "organization": "myorg",
+        "organization": "dummy-org",
     }
     provider = GitHubCopilotProvider(account_data)
 
@@ -251,9 +269,9 @@ def test_github_copilot_provider_fetch_org_404_uses_fallback_if_available(mock_g
     """On 404 org billing, fallback endpoints should still be able to return org quota."""
     account_data = {
         "type": "github_copilot",
-        "email": "testuser",
+        "email": "dummy-user-a",
         "githubToken": "fake-token",
-        "organization": "myorg",
+        "organization": "dummy-org",
     }
     provider = GitHubCopilotProvider(account_data)
 
@@ -261,24 +279,24 @@ def test_github_copilot_provider_fetch_org_404_uses_fallback_if_available(mock_g
         mock_resp = Mock()
         url = args[0] if args else ""
 
-        if "orgs/myorg/copilot/billing" in url:
+        if "orgs/dummy-org/copilot/billing" in url:
             mock_resp.status_code = 404
             return mock_resp
 
-        if "orgs/myorg/members/testuser/copilot" in url:
+        if "orgs/dummy-org/members/dummy-user-a/copilot" in url:
             mock_resp.status_code = 200
             mock_resp.json.return_value = {}
             return mock_resp
 
         if "/user" in url:
             mock_resp.status_code = 200
-            mock_resp.json.return_value = {"login": "testuser"}
+            mock_resp.json.return_value = {"login": "dummy-user-a"}
             return mock_resp
 
         if "copilot_internal/user" in url:
             mock_resp.status_code = 200
             mock_resp.json.return_value = {
-                "organization_login_list": ["myorg"],
+                "organization_login_list": ["dummy-org"],
                 "quota_reset_date": "2026-03-01T00:00:00Z",
                 "quota_snapshots": {
                     "premium_interactions": {
@@ -296,12 +314,12 @@ def test_github_copilot_provider_fetch_org_404_uses_fallback_if_available(mock_g
 
     quota = provider._fetch_org_copilot_quota(
         headers={"Authorization": "Bearer fake-token"},
-        organization="myorg",
+        organization="dummy-org",
     )
 
     assert quota is not None
     assert not quota.get("is_error", False)
-    assert quota["display_name"] == "myorg"
+    assert quota["display_name"] == "dummy-org"
 
 
 @patch("limitwatch.providers.github_copilot.requests.get")
@@ -309,18 +327,18 @@ def test_github_copilot_provider_discover_orgs(mock_get):
     """Test organization auto-discovery."""
     mock_get.return_value.status_code = 200
     mock_get.return_value.json.return_value = [
-        {"login": "org-a"},
-        {"login": "org-b"},
-        {"login": "org-c"},
+        {"login": "dummy-org"},
+        {"login": "example-org"},
+        {"login": "dummy-org-2"},
     ]
 
     provider = GitHubCopilotProvider({})
     orgs = provider._discover_organizations("fake-token")
 
     assert len(orgs) == 3
-    assert "org-a" in orgs
-    assert "org-b" in orgs
-    assert "org-c" in orgs
+    assert "dummy-org" in orgs
+    assert "example-org" in orgs
+    assert "dummy-org-2" in orgs
     # Check they're sorted
     assert orgs == sorted(orgs)
 
@@ -414,7 +432,7 @@ def test_github_copilot_provider_personal_not_shown_for_business_plan(
     internal_resp.status_code = 200
     internal_resp.json.return_value = {
         "copilot_plan": "business",
-        "organization_login_list": ["myorg"],
+        "organization_login_list": ["dummy-org"],
         "quota_reset_date": "2026-03-01T00:00:00Z",
         "quota_snapshots": {
             "premium_interactions": {
@@ -445,13 +463,13 @@ def test_github_copilot_provider_personal_not_shown_when_plan_unknown_org_presen
     """Unknown internal plan with org membership should not be shown as personal usage."""
     headers = {"Authorization": "Bearer fake-token"}
     provider = GitHubCopilotProvider(
-        {"githubToken": "fake-token", "organization": "myorg"}
+        {"githubToken": "fake-token", "organization": "dummy-org"}
     )
 
     internal_resp = MagicMock()
     internal_resp.status_code = 200
     internal_resp.json.return_value = {
-        "organization_login_list": ["myorg"],
+        "organization_login_list": ["dummy-org"],
         "quota_reset_date": "2026-03-01T00:00:00Z",
         "quota_snapshots": {
             "premium_interactions": {
@@ -550,8 +568,8 @@ def test_github_copilot_provider_fetch_member_copilot_quota(mock_get):
         url = args[0] if args else ""
         if "/user" in url and "members" not in url:
             mock_resp.status_code = 200
-            mock_resp.json.return_value = {"login": "testuser"}
-        elif "members/testuser/copilot" in url:
+            mock_resp.json.return_value = {"login": "dummy-user-a"}
+        elif "members/dummy-user-a/copilot" in url:
             mock_resp.status_code = 200
             mock_resp.json.return_value = {
                 "plan_type": "business",
@@ -563,10 +581,10 @@ def test_github_copilot_provider_fetch_member_copilot_quota(mock_get):
 
     mock_get.side_effect = mock_get_side_effect
 
-    quota = provider._fetch_member_copilot_quota(headers, "myorg")
+    quota = provider._fetch_member_copilot_quota(headers, "dummy-org")
 
     assert quota is not None
-    assert quota["display_name"] == "myorg"
+    assert quota["display_name"] == "dummy-org"
     assert quota["remaining_pct"] == 100.0
 
 
@@ -578,7 +596,7 @@ def test_github_copilot_provider_fetch_member_quota_user_lookup_fails(mock_get):
 
     mock_get.return_value.status_code = 401
 
-    quota = provider._fetch_member_copilot_quota(headers, "myorg")
+    quota = provider._fetch_member_copilot_quota(headers, "dummy-org")
 
     assert quota is None
 
@@ -597,10 +615,10 @@ def test_github_copilot_provider_fetch_org_success(mock_get):
         }
     }
 
-    quota = provider._fetch_org_copilot_quota(headers, "myorg")
+    quota = provider._fetch_org_copilot_quota(headers, "dummy-org")
 
     assert quota is not None
-    assert "myorg" in quota["display_name"]
+    assert "dummy-org" in quota["display_name"]
     # display_name now shows only the org name; seat usage is reflected via used_pct
     assert "active" not in quota["display_name"]
     assert abs(quota["used_pct"] - 72.0) < 0.01  # 18/25 = 72%
@@ -617,7 +635,7 @@ def test_github_copilot_provider_fetch_org_403_error(mock_get):
 
     mock_get.return_value.status_code = 403
 
-    quota = provider._fetch_org_copilot_quota(headers, "myorg")
+    quota = provider._fetch_org_copilot_quota(headers, "dummy-org")
 
     assert quota is not None
     assert quota.get("is_error") is True
@@ -633,16 +651,16 @@ def test_github_copilot_provider_fetch_org_fallback_to_internal_org(mock_get):
     def mock_get_side_effect(*args, **kwargs):
         mock_resp = Mock()
         url = args[0] if args else ""
-        if "orgs/myorg/copilot/billing" in url:
+        if "orgs/dummy-org/copilot/billing" in url:
             mock_resp.status_code = 403
             return mock_resp
-        if "orgs/myorg/members/" in url:
+        if "orgs/dummy-org/members/" in url:
             mock_resp.status_code = 404
             return mock_resp
         if "copilot_internal/user" in url:
             mock_resp.status_code = 200
             mock_resp.json.return_value = {
-                "organization_login_list": ["myorg"],
+                "organization_login_list": ["dummy-org"],
                 "quota_reset_date": "2026-03-01T00:00:00Z",
                 "quota_snapshots": {
                     "premium_interactions": {
@@ -653,7 +671,7 @@ def test_github_copilot_provider_fetch_org_fallback_to_internal_org(mock_get):
             return mock_resp
         if url.endswith("/user"):
             mock_resp.status_code = 200
-            mock_resp.json.return_value = {"login": "testuser"}
+            mock_resp.json.return_value = {"login": "dummy-user-a"}
             return mock_resp
 
         mock_resp.status_code = 404
@@ -661,11 +679,11 @@ def test_github_copilot_provider_fetch_org_fallback_to_internal_org(mock_get):
 
     mock_get.side_effect = mock_get_side_effect
 
-    quota = provider._fetch_org_copilot_quota(headers, "myorg")
+    quota = provider._fetch_org_copilot_quota(headers, "dummy-org")
 
     assert quota is not None
     assert quota.get("is_error") is not True
-    assert quota["display_name"] == "myorg"
+    assert quota["display_name"] == "dummy-org"
     assert abs(quota["used_pct"] - 1.2) < 0.01
 
 
@@ -706,9 +724,9 @@ class TestSeatPercentages:
 
 class TestBuildOrgError:
     def test_structure(self):
-        err = _build_org_error("myorg", "Access denied")
+        err = _build_org_error("dummy-org", "Access denied")
         assert err["is_error"] is True
-        assert "myorg" in err["display_name"]
+        assert "dummy-org" in err["display_name"]
         assert err["message"] == "Access denied"
         assert err["source_type"] == "GitHub Copilot"
 
@@ -739,17 +757,17 @@ class TestInteractiveLogin:
 
         # Mock _get_gh_token to return a token
         with patch.object(provider, "_get_gh_token", return_value="gh-token"):
-            # No orgs discovered
-            with patch.object(provider, "_discover_organizations", return_value=[]):
-                mock_prompt.return_value = ""  # No manual org entry
+            with patch.object(provider, "_discover_gh_accounts", return_value=[]):
+                with patch.object(provider, "_discover_organizations", return_value=[]):
+                    mock_prompt.return_value = ""  # No manual org entry
 
-                # Mock validate_token
-                mock_get.return_value.status_code = 200
-                mock_get.return_value.json.return_value = {"login": "testuser"}
+                    # Mock validate_token
+                    mock_get.return_value.status_code = 200
+                    mock_get.return_value.json.return_value = {"login": "dummy-user-a"}
 
-                result = provider.interactive_login(dm)
-                assert result["email"] == "testuser"
-                assert result["githubToken"] == "gh-token"
+                    result = provider.interactive_login(dm)
+                    assert result["email"] == "dummy-user-a"
+                    assert result["githubToken"] == "gh-token"
 
     @patch("click.prompt")
     @patch("limitwatch.providers.github_copilot.requests.get")
@@ -762,7 +780,7 @@ class TestInteractiveLogin:
             with patch.object(provider, "_discover_organizations", return_value=[]):
                 mock_prompt.side_effect = ["manual-token", ""]  # token, then no org
                 mock_get.return_value.status_code = 200
-                mock_get.return_value.json.return_value = {"login": "testuser"}
+                mock_get.return_value.json.return_value = {"login": "dummy-user-a"}
 
                 result = provider.interactive_login(dm)
                 assert result["githubToken"] == "manual-token"
@@ -776,14 +794,16 @@ class TestInteractiveLogin:
 
         with patch.object(provider, "_get_gh_token", return_value="gh-token"):
             with patch.object(
-                provider, "_discover_organizations", return_value=["org-a", "org-b"]
+                provider,
+                "_discover_organizations",
+                return_value=["dummy-org", "example-org"],
             ):
                 mock_prompt.return_value = 1  # Select first org
                 mock_get.return_value.status_code = 200
-                mock_get.return_value.json.return_value = {"login": "testuser"}
+                mock_get.return_value.json.return_value = {"login": "dummy-user-a"}
 
                 result = provider.interactive_login(dm)
-                assert result["organization"] == "org-a"
+                assert result["organization"] == "dummy-org"
 
     @patch("click.prompt")
     @patch("limitwatch.providers.github_copilot.requests.get")
@@ -793,15 +813,16 @@ class TestInteractiveLogin:
         dm = MagicMock()
 
         with patch.object(provider, "_get_gh_token", return_value="gh-token"):
-            with patch.object(
-                provider, "_discover_organizations", return_value=["org-a"]
-            ):
-                mock_prompt.return_value = 0  # Skip org
-                mock_get.return_value.status_code = 200
-                mock_get.return_value.json.return_value = {"login": "testuser"}
+            with patch.object(provider, "_discover_gh_accounts", return_value=[]):
+                with patch.object(
+                    provider, "_discover_organizations", return_value=["dummy-org"]
+                ):
+                    mock_prompt.return_value = 0  # Skip org
+                    mock_get.return_value.status_code = 200
+                    mock_get.return_value.json.return_value = {"login": "dummy-user-a"}
 
-                result = provider.interactive_login(dm)
-                assert "organization" not in result
+                    result = provider.interactive_login(dm)
+                    assert "organization" not in result
 
 
 class TestPromptForToken:
@@ -823,10 +844,12 @@ class TestTryDiscoverOrgs:
         dm = MagicMock()
 
         with patch.object(
-            provider, "_discover_organizations", return_value=["org1", "org2"]
+            provider,
+            "_discover_organizations",
+            return_value=["dummy-org", "example-org"],
         ):
             orgs = provider._try_discover_orgs(dm, "token")
-            assert orgs == ["org1", "org2"]
+            assert orgs == ["dummy-org", "example-org"]
 
     def test_exception(self):
         provider = GitHubCopilotProvider({})
@@ -845,16 +868,55 @@ class TestSelectOrgFromList:
         dm = MagicMock()
         mock_prompt.return_value = 2
         result = GitHubCopilotProvider._select_org_from_list(
-            dm, ["org-a", "org-b", "org-c"]
+            dm, ["dummy-org", "example-org", "dummy-org-2"]
         )
-        assert result == "org-b"
+        assert result == "example-org"
 
     @patch("click.prompt")
     def test_select_skip(self, mock_prompt):
         dm = MagicMock()
         mock_prompt.return_value = 0
-        result = GitHubCopilotProvider._select_org_from_list(dm, ["org-a"])
+        result = GitHubCopilotProvider._select_org_from_list(dm, ["dummy-org"])
         assert result is None
+
+
+class TestGitHubCliAccountSeparation:
+    @patch("limitwatch.providers.github_copilot.requests.get")
+    def test_login_keeps_selected_account(self, mock_get):
+        provider = GitHubCopilotProvider({})
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {"login": "dummy-user-a"}
+
+        account = provider.login(
+            token="fake-token",
+            token_source="gh_cli",
+            github_account="dummy-user-a",
+        )
+
+        assert account["githubAuthSource"] == "gh_cli"
+        assert account["github_account"] == "dummy-user-a"
+
+    @patch("limitwatch.providers.github_copilot.requests.get")
+    def test_fetch_quotas_stays_single_account(self, mock_get):
+        provider = GitHubCopilotProvider(
+            {
+                "type": "github_copilot",
+                "email": "dummy-user-a",
+                "githubToken": "fake-token",
+                "github_account": "dummy-user-a",
+            }
+        )
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "seat_breakdown": {"total": 100, "active_this_cycle": 5}
+        }
+
+        with patch.object(provider, "_discover_gh_accounts") as mock_discover:
+            quotas = provider.fetch_quotas()
+
+        mock_discover.assert_not_called()
+        assert len(quotas) == 1
+        assert quotas[0]["display_name"] == "Personal"
 
 
 # --- Additional edge case tests ---
@@ -940,7 +1002,7 @@ class TestFetchOrgCopilotQuota:
         provider = GitHubCopilotProvider({"githubToken": "tok"})
         mock_get.return_value.status_code = 500
         headers = _make_github_headers("tok")
-        result = provider._fetch_org_copilot_quota(headers, "myorg")
+        result = provider._fetch_org_copilot_quota(headers, "dummy-org")
         assert result["is_error"] is True
         assert "HTTP 500" in result["message"]
 
@@ -950,7 +1012,7 @@ class TestFetchOrgCopilotQuota:
         provider = GitHubCopilotProvider({"githubToken": "tok"})
         mock_get.side_effect = Exception("Connection reset")
         headers = _make_github_headers("tok")
-        result = provider._fetch_org_copilot_quota(headers, "myorg")
+        result = provider._fetch_org_copilot_quota(headers, "dummy-org")
         assert result["is_error"] is True
         assert "Connection reset" in result["message"]
 
@@ -970,11 +1032,11 @@ class TestFetchOrgFromInternalUser:
         provider = GitHubCopilotProvider({"githubToken": "tok"})
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = {
-            "organization_login_list": ["other-org"],
+            "organization_login_list": ["example-org"],
             "quota_snapshots": {},
         }
         headers = _make_github_headers("tok")
-        result = provider._fetch_org_from_copilot_internal_user(headers, "myorg")
+        result = provider._fetch_org_from_copilot_internal_user(headers, "dummy-org")
         assert result is None
 
     @patch("limitwatch.providers.github_copilot.requests.get")
@@ -983,11 +1045,11 @@ class TestFetchOrgFromInternalUser:
         provider = GitHubCopilotProvider({"githubToken": "tok"})
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = {
-            "organization_login_list": ["myorg"],
+            "organization_login_list": ["dummy-org"],
             "quota_snapshots": {},
         }
         headers = _make_github_headers("tok")
-        result = provider._fetch_org_from_copilot_internal_user(headers, "myorg")
+        result = provider._fetch_org_from_copilot_internal_user(headers, "dummy-org")
         assert result is not None
         assert result["remaining_pct"] == 100.0
         assert result["used_pct"] == 0.0
