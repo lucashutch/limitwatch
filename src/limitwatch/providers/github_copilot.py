@@ -541,7 +541,7 @@ class GitHubCopilotProvider(BaseProvider):
             return None
 
         remaining_pct = float(percent_remaining)
-        used_pct = max(0.0, min(100.0, 100.0 - remaining_pct))
+        used_pct = max(0.0, 100.0 - remaining_pct)
         reset_iso = internal_data.get("quota_reset_date") or "Monthly"
 
         extras = {}
@@ -752,7 +752,7 @@ class GitHubCopilotProvider(BaseProvider):
         percent_remaining = premium.get("percent_remaining")
         if isinstance(percent_remaining, (int, float)):
             remaining_pct = float(percent_remaining)
-            used_pct = max(0.0, min(100.0, 100.0 - remaining_pct))
+            used_pct = max(0.0, 100.0 - remaining_pct)
         else:
             remaining_pct = 100.0
             used_pct = 0.0
