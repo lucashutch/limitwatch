@@ -64,11 +64,237 @@ def _build_personal_quota(remaining_pct, used_pct, reset, **extras) -> Dict[str,
     return quota
 
 
-PERSONAL_PLANS = {"individual", "individual_pro", "pro", "pro+"}
+PERSONAL_PLANS = {"individual", "individual_pro", "pro", "pro+", "pro_plus", "max"}
 DEFAULT_API_TIMEOUT = 4
 DEFAULT_GH_CLI_TIMEOUT = 6
 ENABLE_GH_CLI_FALLBACK_DEFAULT = False
 GH_AUTH_STATUS_TIMEOUT = 6
+AI_CREDIT_DOLLARS = 0.01
+AI_CREDIT_SKU_HINTS = ("ai_credit", "ai credit", "copilot premium", "premium request")
+AI_CREDIT_PRODUCT_HINTS = ("copilot",)
+PERSONAL_AI_CREDIT_ALLOWANCES = {
+    "free": 0,
+    "individual": 1500,
+    "individual_pro": 1500,
+    "pro": 1500,
+    "pro+": 7000,
+    "pro_plus": 7000,
+    "max": 20000,
+}
+ORG_AI_CREDIT_ALLOWANCES = {
+    "business": 1900,
+    "enterprise": 3900,
+}
+ORG_PROMO_AI_CREDIT_ALLOWANCES = {
+    "business": 3000,
+    "enterprise": 7000,
+}
+PROMO_START = datetime(2026, 6, 1, tzinfo=timezone.utc)
+PROMO_END = datetime(2026, 9, 1, tzinfo=timezone.utc)
+
+
+def _current_month_window(now: Optional[datetime] = None) -> Tuple[str, str]:
+    """Return current UTC month [start, end) date strings for billing APIs."""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    start = now.astimezone(timezone.utc).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return start.date().isoformat(), end.date().isoformat()
+
+
+def _billing_usage_urls(owner: str, is_org: bool) -> Tuple[str, str]:
+    """Build public billing usage and summary URLs."""
+    owner_path = f"organizations/{owner}" if is_org else f"users/{owner}"
+    base = f"https://api.github.com/{owner_path}/settings/billing/usage"
+    return base, f"{base}/summary"
+
+
+def _credits_from_amount(amount: Any) -> Optional[float]:
+    if isinstance(amount, (int, float)):
+        return float(amount) / AI_CREDIT_DOLLARS
+    return None
+
+
+def _looks_like_copilot_ai_credit(row: Dict[str, Any]) -> bool:
+    text = " ".join(
+        str(row.get(k, ""))
+        for k in (
+            "product",
+            "productName",
+            "sku",
+            "skuName",
+            "meter",
+            "description",
+            "usageType",
+        )
+    ).lower()
+    return any(h in text for h in AI_CREDIT_PRODUCT_HINTS) and any(
+        h in text for h in AI_CREDIT_SKU_HINTS
+    )
+
+
+def _iter_billing_rows(payload: Any):
+    if isinstance(payload, list):
+        for item in payload:
+            yield from _iter_billing_rows(item)
+    elif isinstance(payload, dict):
+        if _looks_like_copilot_ai_credit(payload):
+            yield payload
+        for key in ("usageItems", "items", "usage", "summary", "products", "lineItems"):
+            if key in payload:
+                yield from _iter_billing_rows(payload[key])
+
+
+def _parse_ai_credit_billing_payload(
+    payload: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Parse public billing usage/summary payloads for Copilot AI credits."""
+    rows = list(_iter_billing_rows(payload))
+    if not rows:
+        return None
+
+    used = 0.0
+    gross = 0.0
+    discount = 0.0
+    net_amount = 0.0
+    parsed_rows = []
+    for row in rows:
+        row_used = None
+        for key in ("netQuantity", "net_quantity"):
+            if isinstance(row.get(key), (int, float)):
+                row_used = float(row[key])
+                break
+        if row_used is None:
+            for key in ("netAmount", "net_amount"):
+                row_used = _credits_from_amount(row.get(key))
+                if row_used is not None:
+                    break
+        if row_used is None:
+            for key in ("quantity", "usageQuantity", "amount"):
+                if isinstance(row.get(key), (int, float)):
+                    row_used = float(row[key])
+                    break
+        if row_used is None:
+            row_used = 0.0
+        used += row_used
+
+        row_gross = row.get("grossAmount", row.get("gross_amount", 0))
+        row_discount = row.get("discountAmount", row.get("discount_amount", 0))
+        row_net = row.get("netAmount", row.get("net_amount", 0))
+        gross += float(row_gross) if isinstance(row_gross, (int, float)) else 0.0
+        discount += (
+            float(row_discount) if isinstance(row_discount, (int, float)) else 0.0
+        )
+        net_amount += float(row_net) if isinstance(row_net, (int, float)) else 0.0
+        parsed_rows.append(
+            {
+                "product": row.get("product") or row.get("productName"),
+                "sku": row.get("sku") or row.get("skuName"),
+                "used": row_used,
+                "gross_amount": row_gross,
+                "discount_amount": row_discount,
+                "net_amount": row_net,
+            }
+        )
+
+    return {
+        "used": used,
+        "gross_amount": gross,
+        "discount_amount": discount,
+        "net_amount": net_amount,
+        "billing_rows": parsed_rows,
+    }
+
+
+def _is_org_promo_window(now: Optional[datetime] = None) -> bool:
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    return PROMO_START <= now < PROMO_END
+
+
+def _personal_ai_credit_allowance(*sources: Optional[Dict[str, Any]]) -> Optional[int]:
+    """Infer personal monthly AI credit allowance from provider-owned data."""
+    for source in sources:
+        if not source:
+            continue
+        for key in ("copilot_plan", "plan", "plan_type", "sku", "subscription"):
+            plan = str(source.get(key, "")).lower().replace(" ", "_")
+            if plan in PERSONAL_AI_CREDIT_ALLOWANCES:
+                return PERSONAL_AI_CREDIT_ALLOWANCES[plan]
+            if "pro+" in plan or "pro_plus" in plan:
+                return PERSONAL_AI_CREDIT_ALLOWANCES["pro+"]
+            if "pro" in plan and "enterprise" not in plan:
+                return PERSONAL_AI_CREDIT_ALLOWANCES["pro"]
+            if "max" in plan:
+                return PERSONAL_AI_CREDIT_ALLOWANCES["max"]
+    return None
+
+
+def _org_ai_credit_allowance(
+    seats: Optional[int], plan: Optional[str], now: Optional[datetime] = None
+) -> Optional[int]:
+    """Infer org pooled monthly AI credit allowance."""
+    if not isinstance(seats, int) or seats <= 0:
+        return None
+    plan_key = str(plan or "").lower().replace(" ", "_")
+    if "enterprise" in plan_key:
+        plan_key = "enterprise"
+    elif "business" in plan_key:
+        plan_key = "business"
+    else:
+        return None
+    base = ORG_AI_CREDIT_ALLOWANCES.get(plan_key)
+    if _is_org_promo_window(now):
+        base = ORG_PROMO_AI_CREDIT_ALLOWANCES.get(plan_key, base)
+    if not base:
+        return None
+    return seats * base
+
+
+def _build_ai_credit_quota(
+    name: str,
+    display_name: str,
+    used: float,
+    allowance: Optional[int],
+    reset: str,
+    **metadata,
+) -> Dict[str, Any]:
+    """Build a display-generic quota dict for AI credits."""
+    quota = {
+        "name": name,
+        "display_name": display_name,
+        "used": used,
+        "reset": reset,
+        "source_type": "GitHub Copilot",
+        "billing_model": "ai_credits",
+    }
+    if allowance and allowance > 0:
+        remaining = max(0.0, allowance - used)
+        used_pct = max(0.0, min(100.0, (used / allowance) * 100))
+        quota.update(
+            {
+                "limit": allowance,
+                "remaining": remaining,
+                "used_pct": used_pct,
+                "remaining_pct": max(0.0, 100.0 - used_pct),
+            }
+        )
+    else:
+        quota.update(
+            {
+                "used_pct": 0.0,
+                "remaining_pct": 100.0,
+                "show_progress": False,
+                "allowance_unknown": True,
+            }
+        )
+    quota.update(metadata)
+    return quota
 
 
 class GitHubCopilotProvider(BaseProvider):
@@ -397,68 +623,27 @@ class GitHubCopilotProvider(BaseProvider):
         self.record_timing("github_copilot_total", elapsed_ms)
         return results
 
-    # --- Personal quota fetching (3 fallback strategies) ---
+    # --- Personal quota fetching ---
 
     def _fetch_personal_copilot_quota(
         self, headers: Dict[str, str]
     ) -> Optional[Dict[str, Any]]:
-        """Fetch personal Copilot quota using multiple fallback paths."""
+        """Fetch personal Copilot quota using AI credits billing only."""
         start = time.perf_counter()
-        preferred = self.account_data.get("preferredPersonalQuotaMethod")
-
-        if preferred == "internal":
-            quota = self._try_personal_via_internal(headers)
-            if quota:
-                return quota
-        elif preferred == "billing":
-            quota = self._try_personal_via_billing(headers)
-            if quota:
-                return quota
-
-        network_methods = {
-            "internal": lambda: self._try_personal_via_internal(headers),
-            "billing": lambda: self._try_personal_via_billing(headers),
-        }
-
-        if preferred in network_methods:
-            del network_methods[preferred]
-
-        method, quota = self._first_successful_method(network_methods)
+        quota = self._try_personal_via_ai_credits(headers)
         if quota:
-            self.account_data["preferredPersonalQuotaMethod"] = method
+            self.account_data["preferredPersonalQuotaMethod"] = "ai_credits"
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.debug(
-                f"[github_copilot] personal method={method} elapsed_ms={elapsed_ms:.1f}"
-            )
-            self.record_timing(
-                "github_copilot_personal_race",
-                elapsed_ms,
-                winner=method,
+                f"[github_copilot] personal method=ai_credits elapsed_ms={elapsed_ms:.1f}"
             )
             return quota
 
-        if not self.account_data.get(
-            "enableGhCliFallback", ENABLE_GH_CLI_FALLBACK_DEFAULT
-        ):
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            logger.debug(
-                f"[github_copilot] personal method=none elapsed_ms={elapsed_ms:.1f}"
-            )
-            return None
-
-        quota = self._try_personal_via_gh_cli()
-        if quota:
-            self.account_data["preferredPersonalQuotaMethod"] = "gh_cli"
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            logger.debug(
-                f"[github_copilot] personal method=gh_cli elapsed_ms={elapsed_ms:.1f}"
-            )
-        else:
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            logger.debug(
-                f"[github_copilot] personal method=none elapsed_ms={elapsed_ms:.1f}"
-            )
-        return quota
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.debug(
+            f"[github_copilot] personal method=none elapsed_ms={elapsed_ms:.1f}"
+        )
+        return None
 
     @staticmethod
     def _first_successful_method(
@@ -496,119 +681,98 @@ class GitHubCopilotProvider(BaseProvider):
     def _try_personal_via_internal(
         self, headers: Dict[str, str]
     ) -> Optional[Dict[str, Any]]:
-        """Try copilot_internal/user endpoint for personal quota."""
+        """Legacy premium request quota is no longer returned."""
+        return None
+
+    def _github_login(self, headers: Dict[str, str]) -> Optional[str]:
+        """Return validated GitHub login for public billing paths."""
+        login = self.account_data.get("email") or self.github_login
+        if login and login != "GitHub User" and "@" not in str(login):
+            return str(login)
+        try:
+            resp = requests.get(
+                "https://api.github.com/user",
+                headers=headers,
+                timeout=self.time_remaining(DEFAULT_API_TIMEOUT),
+            )
+            if resp.status_code == 200:
+                return resp.json().get("login")
+        except Exception:
+            pass
+        return None
+
+    def _fetch_billing_credit_usage(
+        self, headers: Dict[str, str], owner: str, is_org: bool
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch and parse public billing usage/summary APIs; summary wins."""
+        usage_url, summary_url = _billing_usage_urls(owner, is_org)
+        start_date, end_date = _current_month_window()
+        params = {"start_date": start_date, "end_date": end_date}
+        parsed_usage = None
+
+        for url, source in ((summary_url, "summary"), (usage_url, "usage")):
+            if not self.has_time_remaining():
+                return parsed_usage
+            try:
+                resp = requests.get(
+                    url,
+                    headers=headers,
+                    timeout=self.time_remaining(DEFAULT_API_TIMEOUT),
+                    params=params,
+                )
+                if resp.status_code != 200:
+                    continue
+                parsed = _parse_ai_credit_billing_payload(resp.json())
+                if parsed:
+                    parsed["billing_source"] = source
+                    parsed["billing_window"] = {"start": start_date, "end": end_date}
+                    if source == "summary":
+                        return parsed
+                    parsed_usage = parsed
+            except Exception:
+                continue
+        return parsed_usage
+
+    def _try_personal_via_ai_credits(
+        self, headers: Dict[str, str]
+    ) -> Optional[Dict[str, Any]]:
+        """Try June 2026+ public user billing AI credits APIs."""
         start = time.perf_counter()
-        if not self.has_time_remaining():
+        username = self._github_login(headers)
+        if not username:
             return None
-        internal_data = self._fetch_copilot_internal_user(headers)
-        if not internal_data:
-            return None
-
-        copilot_plan = str(internal_data.get("copilot_plan", "")).lower()
-        reset_iso = internal_data.get("quota_reset_date") or "Monthly"
-
-        if copilot_plan == "free":
-            return _build_personal_quota(100.0, 0.0, reset_iso)
-
-        # Only individual plans use internal snapshot for personal usage
-        if copilot_plan and copilot_plan not in PERSONAL_PLANS:
+        billing = self._fetch_billing_credit_usage(headers, username, is_org=False)
+        if not billing:
             return None
 
-        # Unknown plan but org is present → likely org pool data
-        if not copilot_plan and self.organization:
-            copilot_orgs = {
-                o.lower()
-                for o in (internal_data.get("organization_login_list") or [])
-                if isinstance(o, str)
-            }
-            if self.organization.lower() in copilot_orgs:
-                return None
-
-        quota = self._extract_premium_quota(internal_data)
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        if quota:
-            self.record_timing("github_copilot_personal_internal", elapsed_ms)
+        internal = self._fetch_copilot_internal_user(headers)
+        allowance = _personal_ai_credit_allowance(internal, self.account_data)
+        quota = _build_ai_credit_quota(
+            "GitHub Copilot Personal",
+            "Personal",
+            billing["used"],
+            allowance,
+            _next_month_reset_iso(),
+            **{k: v for k, v in billing.items() if k != "used"},
+        )
+        self.record_timing(
+            "github_copilot_personal_ai_credits",
+            (time.perf_counter() - start) * 1000,
+        )
         return quota
 
     def _extract_premium_quota(self, internal_data: dict) -> Optional[Dict[str, Any]]:
-        """Extract premium interaction quota from internal user data."""
-        premium = internal_data.get("quota_snapshots", {}).get(
-            "premium_interactions", {}
-        )
-        percent_remaining = premium.get("percent_remaining")
-
-        if not isinstance(percent_remaining, (int, float)):
-            return None
-
-        remaining_pct = float(percent_remaining)
-        used_pct = max(0.0, 100.0 - remaining_pct)
-        reset_iso = internal_data.get("quota_reset_date") or "Monthly"
-
-        extras = {}
-        entitlement = premium.get("entitlement")
-        remaining = premium.get("remaining")
-        if isinstance(entitlement, (int, float)):
-            extras["limit"] = entitlement
-        if isinstance(remaining, (int, float)):
-            extras["remaining"] = remaining
-        if isinstance(entitlement, (int, float)) and isinstance(
-            remaining, (int, float)
-        ):
-            extras["used"] = entitlement - remaining
-
-        overage_count = premium.get("overage_count", 0)
-        if isinstance(overage_count, (int, float)):
-            extras["overage_used"] = overage_count
-        extras["overage_permitted"] = bool(premium.get("overage_permitted", False))
-
-        return _build_personal_quota(remaining_pct, used_pct, reset_iso, **extras)
+        """Legacy premium interaction quotas are intentionally ignored."""
+        return None
 
     def _try_personal_via_billing(
         self, headers: Dict[str, str]
     ) -> Optional[Dict[str, Any]]:
-        """Try /user/copilot/billing endpoint for personal quota."""
-        start = time.perf_counter()
-        if not self.has_time_remaining():
-            return None
-        try:
-            resp = requests.get(
-                "https://api.github.com/user/copilot/billing",
-                headers=headers,
-                timeout=self.time_remaining(DEFAULT_API_TIMEOUT),
-            )
-            if resp.status_code != 200:
-                return None
-
-            data = resp.json()
-            seat_breakdown = data.get("seat_breakdown", {})
-            total = seat_breakdown.get("total", 0)
-            active = seat_breakdown.get("active_this_cycle", 0)
-
-            remaining_pct, used_pct = _seat_percentages(total, active)
-
-            quota = _build_personal_quota(
-                remaining_pct,
-                used_pct,
-                _next_month_reset_iso(),
-                remaining=total - active,
-                limit=total,
-                used=active,
-            )
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            self.record_timing("github_copilot_personal_billing", elapsed_ms)
-            return quota
-        except Exception:
-            return None
+        """Legacy personal Copilot billing seat quota is no longer returned."""
+        return None
 
     def _try_personal_via_gh_cli(self) -> Optional[Dict[str, Any]]:
-        """Try gh CLI for personal quota."""
-        try:
-            usage_data = self._get_copilot_usage_via_gh()
-            if usage_data and "usage_percentage" in usage_data:
-                usage_pct = usage_data.get("usage_percentage", 0)
-                return _build_personal_quota(100.0 - usage_pct, usage_pct, "Monthly")
-        except Exception:
-            pass
+        """Legacy gh CLI quota fallback is no longer returned."""
         return None
 
     # --- Org quota fetching ---
@@ -616,35 +780,21 @@ class GitHubCopilotProvider(BaseProvider):
     def _fetch_org_copilot_quota(
         self, headers: Dict[str, str], organization: str
     ) -> Optional[Dict[str, Any]]:
-        """Fetch organization Copilot quota with fallbacks."""
+        """Fetch organization Copilot quota using AI credits billing only."""
         start = time.perf_counter()
         if not self.has_time_remaining():
             return None
         try:
-            resp = requests.get(
-                f"https://api.github.com/orgs/{organization}/copilot/billing",
-                headers=headers,
-                timeout=self.time_remaining(DEFAULT_API_TIMEOUT),
-            )
-            if resp.status_code == 200:
-                elapsed_ms = (time.perf_counter() - start) * 1000
-                logger.debug(
-                    f"[github_copilot] org primary status=200 elapsed_ms={elapsed_ms:.1f}"
-                )
-                self.record_timing("github_copilot_org_billing", elapsed_ms)
-                return self._parse_org_billing(resp.json(), organization)
-            if resp.status_code in (403, 404):
-                elapsed_ms = (time.perf_counter() - start) * 1000
-                logger.debug(
-                    f"[github_copilot] org primary status={resp.status_code} elapsed_ms={elapsed_ms:.1f}"
-                )
-                return self._try_org_fallbacks(headers, organization, resp.status_code)
+            ai_credit_quota = self._try_org_via_ai_credits(headers, organization)
+            if ai_credit_quota:
+                return ai_credit_quota
+
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.debug(
-                f"[github_copilot] org primary status={resp.status_code} elapsed_ms={elapsed_ms:.1f}"
+                f"[github_copilot] org ai_credits unavailable elapsed_ms={elapsed_ms:.1f}"
             )
             return _build_org_error(
-                organization, f"Could not fetch org quota (HTTP {resp.status_code})"
+                organization, "Could not fetch AI credits billing usage for this org"
             )
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start) * 1000
@@ -652,6 +802,49 @@ class GitHubCopilotProvider(BaseProvider):
                 f"[github_copilot] org error elapsed_ms={elapsed_ms:.1f} err={e}"
             )
             return _build_org_error(organization, f"Error fetching org quota: {str(e)}")
+
+    def _try_org_via_ai_credits(
+        self, headers: Dict[str, str], organization: str
+    ) -> Optional[Dict[str, Any]]:
+        """Try public organization billing AI credits APIs."""
+        start = time.perf_counter()
+        billing = self._fetch_billing_credit_usage(headers, organization, is_org=True)
+        if not billing:
+            return None
+
+        seats = None
+        plan = None
+        try:
+            resp = requests.get(
+                f"https://api.github.com/orgs/{organization}/copilot/billing",
+                headers=headers,
+                timeout=self.time_remaining(DEFAULT_API_TIMEOUT),
+            )
+            if resp.status_code == 200:
+                org_data = resp.json()
+                seat_breakdown = org_data.get("seat_breakdown", {})
+                total = seat_breakdown.get("total")
+                seats = total if isinstance(total, int) else None
+                plan = org_data.get("plan_type") or org_data.get("plan")
+        except Exception:
+            pass
+
+        allowance = _org_ai_credit_allowance(seats, plan)
+        quota = _build_ai_credit_quota(
+            f"GitHub Copilot Org ({organization})",
+            organization,
+            billing["used"],
+            allowance,
+            _next_month_reset_iso(),
+            seats=seats,
+            plan_type=plan,
+            **{k: v for k, v in billing.items() if k != "used"},
+        )
+        self.record_timing(
+            "github_copilot_org_ai_credits",
+            (time.perf_counter() - start) * 1000,
+        )
+        return quota
 
     @staticmethod
     def _parse_org_billing(org_data: dict, organization: str) -> Dict[str, Any]:
@@ -733,43 +926,13 @@ class GitHubCopilotProvider(BaseProvider):
     def _fetch_org_from_copilot_internal_user(
         self, headers: Dict[str, str], organization: str
     ) -> Optional[Dict[str, Any]]:
-        """Fallback org status from copilot_internal/user organization list."""
-        internal_data = self._fetch_copilot_internal_user(headers)
-        if not internal_data:
-            return None
-
-        copilot_orgs = [
-            o.lower()
-            for o in (internal_data.get("organization_login_list") or [])
-            if isinstance(o, str)
-        ]
-        if organization.lower() not in copilot_orgs:
-            return None
-
-        premium = internal_data.get("quota_snapshots", {}).get(
-            "premium_interactions", {}
-        )
-        percent_remaining = premium.get("percent_remaining")
-        if isinstance(percent_remaining, (int, float)):
-            remaining_pct = float(percent_remaining)
-            used_pct = max(0.0, 100.0 - remaining_pct)
-        else:
-            remaining_pct = 100.0
-            used_pct = 0.0
-
-        return {
-            "name": f"GitHub Copilot Org ({organization})",
-            "display_name": organization,
-            "remaining_pct": remaining_pct,
-            "used_pct": used_pct,
-            "reset": internal_data.get("quota_reset_date") or "Monthly",
-            "source_type": "GitHub Copilot",
-        }
+        """Legacy org premium request quota is no longer returned."""
+        return None
 
     def _fetch_member_copilot_quota(
         self, headers: Dict[str, str], organization: str
     ) -> Optional[Dict[str, Any]]:
-        """Fetch personal Copilot status within an organization via member endpoint."""
+        """Fetch member status only; do not return legacy quota data."""
         try:
             username = self._user_login_cache
             if not username:
@@ -785,89 +948,24 @@ class GitHubCopilotProvider(BaseProvider):
             if not username:
                 return None
 
-            resp = requests.get(
+            requests.get(
                 f"https://api.github.com/orgs/{organization}/members/{username}/copilot",
                 headers=headers,
                 timeout=self.time_remaining(DEFAULT_API_TIMEOUT),
             )
-            if resp.status_code == 200:
-                return {
-                    "name": f"GitHub Copilot Org ({organization})",
-                    "display_name": organization,
-                    "remaining_pct": 100.0,
-                    "reset": "Monthly",
-                    "source_type": "GitHub Copilot",
-                }
         except Exception:
             pass
         return None
 
     def _get_copilot_usage_via_gh(self) -> Optional[Dict[str, Any]]:
-        """Try to fetch Copilot usage via gh CLI."""
-        return self._try_gh_internal_usage() or self._try_gh_billing_usage()
+        """Legacy gh CLI quota fallback is no longer used."""
+        return None
 
     def _try_gh_internal_usage(self) -> Optional[Dict[str, Any]]:
-        """Try copilot_internal/user via gh CLI."""
-        try:
-            result = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    "/copilot_internal/user",
-                    "--header",
-                    "X-GitHub-Api-Version:2025-04-01",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=DEFAULT_GH_CLI_TIMEOUT,
-            )
-            if result.returncode != 0:
-                return None
-
-            import json
-
-            data = json.loads(result.stdout)
-            copilot_plan = str(data.get("copilot_plan", "")).lower()
-            if copilot_plan == "free":
-                return {"usage_percentage": 0.0}
-            if copilot_plan not in PERSONAL_PLANS:
-                return None
-
-            premium = data.get("quota_snapshots", {}).get("premium_interactions", {})
-            percent_remaining = premium.get("percent_remaining")
-            if isinstance(percent_remaining, (int, float)):
-                return {"usage_percentage": 100.0 - float(percent_remaining)}
-        except Exception:
-            pass
+        """Legacy gh copilot_internal premium usage is no longer returned."""
         return None
 
     @staticmethod
     def _try_gh_billing_usage() -> Optional[Dict[str, Any]]:
-        """Try /user/copilot/billing via gh CLI."""
-        try:
-            result = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    "/user/copilot/billing",
-                    "--header",
-                    "X-GitHub-Api-Version:2022-11-28",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=DEFAULT_GH_CLI_TIMEOUT,
-            )
-            if result.returncode != 0:
-                return None
-
-            import json
-
-            data = json.loads(result.stdout)
-            seat_breakdown = data.get("seat_breakdown", {})
-            total = seat_breakdown.get("total", 1)
-            active = seat_breakdown.get("active_this_cycle", 0)
-            if total > 0:
-                return {"usage_percentage": (active / total) * 100}
-        except Exception:
-            pass
+        """Legacy gh Copilot billing seat usage is no longer returned."""
         return None

@@ -7,7 +7,13 @@ from limitwatch.providers.github_copilot import (
     _seat_percentages,
     _build_org_error,
     _build_personal_quota,
+    _billing_usage_urls,
+    _current_month_window,
+    _parse_ai_credit_billing_payload,
+    _personal_ai_credit_allowance,
+    _org_ai_credit_allowance,
 )
+from datetime import datetime, timezone
 
 
 @patch("limitwatch.providers.github_copilot.requests.get")
@@ -56,7 +62,7 @@ def test_github_copilot_provider_login_no_token():
 
 @patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_personal_quota(mock_get):
-    """Test fetching personal Copilot quota from user endpoint."""
+    """Test fetching personal Copilot quota from AI credits billing."""
     account_data = {
         "type": "github_copilot",
         "email": "dummy-user-a",
@@ -64,13 +70,11 @@ def test_github_copilot_provider_fetch_personal_quota(mock_get):
     }
     provider = GitHubCopilotProvider(account_data)
 
-    # Mock user endpoint returning quota data
     mock_get.return_value.status_code = 200
     mock_get.return_value.json.return_value = {
-        "seat_breakdown": {
-            "total": 100,
-            "active_this_cycle": 1,
-        }
+        "usageItems": [
+            {"product": "GitHub Copilot", "sku": "AI Credit", "netQuantity": 10}
+        ]
     }
 
     quotas = provider.fetch_quotas()
@@ -79,12 +83,13 @@ def test_github_copilot_provider_fetch_personal_quota(mock_get):
     personal_quotas = [q for q in quotas if "Personal" in q.get("display_name", "")]
     assert len(personal_quotas) > 0
     assert personal_quotas[0]["display_name"] == "Personal"
-    assert personal_quotas[0]["remaining_pct"] == 99.0
+    assert personal_quotas[0]["used"] == 10
+    assert personal_quotas[0]["billing_model"] == "ai_credits"
 
 
 @patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_org_quota(mock_get):
-    """Test fetching org Copilot quota."""
+    """Test fetching org Copilot AI credits usage."""
     account_data = {
         "type": "github_copilot",
         "email": "dummy-user-a",
@@ -97,13 +102,21 @@ def test_github_copilot_provider_fetch_org_quota(mock_get):
     def mock_get_side_effect(*args, **kwargs):
         mock_resp = Mock()
         url = args[0] if args else ""
-        if "copilot/billing" in url:
+        if "settings/billing/usage" in url:
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "usageItems": [
+                    {"product": "GitHub Copilot", "sku": "AI Credit", "netQuantity": 7}
+                ]
+            }
+        elif "copilot/billing" in url:
             mock_resp.status_code = 200
             mock_resp.json.return_value = {
                 "seat_breakdown": {
                     "total": 10,
                     "active_this_cycle": 7,
-                }
+                },
+                "plan_type": "business",
             }
         else:
             mock_resp.status_code = 200
@@ -114,12 +127,11 @@ def test_github_copilot_provider_fetch_org_quota(mock_get):
 
     quotas = provider.fetch_quotas()
 
-    # Should have both personal and org quota
-    assert len(quotas) == 2
+    # Should have org quota; personal has no separate mocked usage for this test.
+    assert len(quotas) >= 1
     org_quota = [q for q in quotas if "dummy-org" in q.get("display_name", "")][0]
-    assert org_quota["remaining_pct"] == 30.0  # (10 - 7) / 10 = 0.3 = 30%
-    assert org_quota["remaining"] == 3
-    assert org_quota["limit"] == 10
+    assert org_quota["used"] == 7
+    assert org_quota["billing_model"] == "ai_credits"
 
 
 @patch("limitwatch.providers.github_copilot.requests.get")
@@ -258,15 +270,15 @@ def test_github_copilot_provider_fetch_org_404_error(mock_get):
 
     quotas = provider.fetch_quotas()
 
-    # Should include 404 error quota
+    # Should include safe AI credits error quota, not legacy 404 quota.
     error_quotas = [q for q in quotas if q.get("is_error")]
     assert len(error_quotas) > 0
-    assert "not found or disabled" in error_quotas[0].get("message", "").lower()
+    assert "ai credits billing usage" in error_quotas[0].get("message", "").lower()
 
 
 @patch("limitwatch.providers.github_copilot.requests.get")
-def test_github_copilot_provider_fetch_org_404_uses_fallback_if_available(mock_get):
-    """On 404 org billing, fallback endpoints should still be able to return org quota."""
+def test_github_copilot_provider_fetch_org_404_does_not_use_legacy_fallback(mock_get):
+    """On billing failure, legacy fallback endpoints must not return quota."""
     account_data = {
         "type": "github_copilot",
         "email": "dummy-user-a",
@@ -318,7 +330,7 @@ def test_github_copilot_provider_fetch_org_404_uses_fallback_if_available(mock_g
     )
 
     assert quota is not None
-    assert not quota.get("is_error", False)
+    assert quota.get("is_error") is True
     assert quota["display_name"] == "dummy-org"
 
 
@@ -368,7 +380,7 @@ def test_github_copilot_provider_discover_orgs_failure(mock_get):
 
 @patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_personal_via_user_endpoint(mock_get):
-    """Test personal quota via user endpoint."""
+    """Legacy user seat endpoint is not used for personal quota."""
     headers = {"Authorization": "Bearer fake-token"}
     provider = GitHubCopilotProvider({})
 
@@ -382,15 +394,12 @@ def test_github_copilot_provider_fetch_personal_via_user_endpoint(mock_get):
 
     quota = provider._fetch_personal_copilot_quota(headers)
 
-    assert quota is not None
-    assert quota["display_name"] == "Personal"
-    assert quota["remaining_pct"] == 98.0
-    assert quota["used_pct"] == 2.0
+    assert quota is None
 
 
 @patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_personal_via_copilot_internal(mock_get):
-    """Test personal quota via copilot_internal user endpoint (individual plan)."""
+    """Legacy copilot_internal premium quota is not returned."""
     headers = {"Authorization": "Bearer fake-token"}
     provider = GitHubCopilotProvider({"githubToken": "fake-token"})
 
@@ -411,11 +420,7 @@ def test_github_copilot_provider_fetch_personal_via_copilot_internal(mock_get):
 
     quota = provider._fetch_personal_copilot_quota(headers)
 
-    assert quota is not None
-    assert "Personal" in quota["display_name"]
-    assert abs(quota["used_pct"] - 1.2) < 0.01
-    assert abs(quota["remaining_pct"] - 98.8) < 0.01
-    assert quota["reset"] == "2026-03-01T00:00:00Z"
+    assert quota is None
 
 
 @patch("limitwatch.providers.github_copilot.subprocess.run")
@@ -490,7 +495,7 @@ def test_github_copilot_provider_personal_not_shown_when_plan_unknown_org_presen
 
 @patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_personal_free_plan_shows_tier_label(mock_get):
-    """Free plan: show 'Personal' label with zero usage."""
+    """Free plan legacy internal data alone is not returned as quota."""
     headers = {"Authorization": "Bearer fake-token"}
     provider = GitHubCopilotProvider({"githubToken": "fake-token"})
 
@@ -509,10 +514,7 @@ def test_github_copilot_provider_personal_free_plan_shows_tier_label(mock_get):
 
     quota = provider._fetch_personal_copilot_quota(headers)
 
-    assert quota is not None
-    assert quota["display_name"] == "Personal"
-    assert quota["used_pct"] == 0.0
-    assert quota["remaining_pct"] == 100.0
+    assert quota is None
 
 
 @patch("limitwatch.providers.github_copilot.subprocess.run")
@@ -535,15 +537,14 @@ def test_github_copilot_provider_fetch_personal_fallback_to_none(
 
 @patch("limitwatch.providers.github_copilot.subprocess.run")
 def test_github_copilot_provider_get_usage_via_gh(mock_run):
-    """Test fetching usage via gh CLI."""
+    """Legacy gh CLI premium usage is not returned."""
     mock_run.return_value.returncode = 0
     mock_run.return_value.stdout = '{"copilot_plan":"individual","quota_snapshots":{"premium_interactions":{"percent_remaining":95.0}}}'
 
     provider = GitHubCopilotProvider({})
     usage = provider._get_copilot_usage_via_gh()
 
-    assert usage is not None
-    assert usage["usage_percentage"] == 5.0
+    assert usage is None
 
 
 @patch("limitwatch.providers.github_copilot.subprocess.run")
@@ -559,7 +560,7 @@ def test_github_copilot_provider_get_usage_via_gh_failure(mock_run):
 
 @patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_member_copilot_quota(mock_get):
-    """Test member-level Copilot quota fetch."""
+    """Member status helper does not return quota data."""
     headers = {"Authorization": "Bearer fake-token"}
     provider = GitHubCopilotProvider({})
 
@@ -583,9 +584,7 @@ def test_github_copilot_provider_fetch_member_copilot_quota(mock_get):
 
     quota = provider._fetch_member_copilot_quota(headers, "dummy-org")
 
-    assert quota is not None
-    assert quota["display_name"] == "dummy-org"
-    assert quota["remaining_pct"] == 100.0
+    assert quota is None
 
 
 @patch("limitwatch.providers.github_copilot.requests.get")
@@ -603,28 +602,35 @@ def test_github_copilot_provider_fetch_member_quota_user_lookup_fails(mock_get):
 
 @patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_org_success(mock_get):
-    """Test organization quota fetch success."""
+    """Test organization AI credits fetch success."""
     headers = {"Authorization": "Bearer fake-token"}
     provider = GitHubCopilotProvider({})
 
-    mock_get.return_value.status_code = 200
-    mock_get.return_value.json.return_value = {
-        "seat_breakdown": {
-            "total": 25,
-            "active_this_cycle": 18,
-        }
-    }
+    def side_effect(url, **kwargs):
+        resp = Mock()
+        resp.status_code = 200
+        if "settings/billing/usage" in url:
+            resp.json.return_value = {
+                "usageItems": [
+                    {"product": "GitHub Copilot", "sku": "AI Credit", "netQuantity": 18}
+                ]
+            }
+        else:
+            resp.json.return_value = {
+                "seat_breakdown": {"total": 25, "active_this_cycle": 18},
+                "plan_type": "business",
+            }
+        return resp
+
+    mock_get.side_effect = side_effect
 
     quota = provider._fetch_org_copilot_quota(headers, "dummy-org")
 
     assert quota is not None
     assert "dummy-org" in quota["display_name"]
-    # display_name now shows only the org name; seat usage is reflected via used_pct
     assert "active" not in quota["display_name"]
-    assert abs(quota["used_pct"] - 72.0) < 0.01  # 18/25 = 72%
-    assert (
-        abs(quota["remaining_pct"] - 28.0) < 0.01
-    )  # Account for floating point precision
+    assert quota["used"] == 18
+    assert quota["billing_model"] == "ai_credits"
 
 
 @patch("limitwatch.providers.github_copilot.requests.get")
@@ -639,12 +645,12 @@ def test_github_copilot_provider_fetch_org_403_error(mock_get):
 
     assert quota is not None
     assert quota.get("is_error") is True
-    assert "Insufficient permissions" in quota["message"]
+    assert "AI credits billing usage" in quota["message"]
 
 
 @patch("limitwatch.providers.github_copilot.requests.get")
 def test_github_copilot_provider_fetch_org_fallback_to_internal_org(mock_get):
-    """Test org fallback to copilot_internal org list when billing/member fail."""
+    """Legacy org internal fallback must not return quota."""
     headers = {"Authorization": "Bearer fake-token"}
     provider = GitHubCopilotProvider({"githubToken": "fake-token"})
 
@@ -682,9 +688,8 @@ def test_github_copilot_provider_fetch_org_fallback_to_internal_org(mock_get):
     quota = provider._fetch_org_copilot_quota(headers, "dummy-org")
 
     assert quota is not None
-    assert quota.get("is_error") is not True
+    assert quota.get("is_error") is True
     assert quota["display_name"] == "dummy-org"
-    assert abs(quota["used_pct"] - 1.2) < 0.01
 
 
 # --- Module-level helper function tests ---
@@ -950,6 +955,7 @@ class TestFetchQuotasEdgeCases:
 class TestTryPersonalViaBilling:
     @patch("limitwatch.providers.github_copilot.requests.get")
     def test_success(self, mock_get):
+        """Legacy personal billing seat quota is ignored."""
         provider = GitHubCopilotProvider({})
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = {
@@ -957,9 +963,7 @@ class TestTryPersonalViaBilling:
         }
         headers = _make_github_headers("token")
         result = provider._try_personal_via_billing(headers)
-        assert result is not None
-        assert result["remaining_pct"] == 75.0
-        assert result["used_pct"] == 25.0
+        assert result is None
 
     @patch("limitwatch.providers.github_copilot.requests.get")
     def test_exception(self, mock_get):
@@ -973,12 +977,11 @@ class TestTryPersonalViaBilling:
 class TestTryPersonalViaGhCli:
     @patch.object(GitHubCopilotProvider, "_get_copilot_usage_via_gh")
     def test_success(self, mock_usage):
+        """Legacy gh CLI usage is ignored."""
         provider = GitHubCopilotProvider({})
         mock_usage.return_value = {"usage_percentage": 25.0}
         result = provider._try_personal_via_gh_cli()
-        assert result is not None
-        assert result["remaining_pct"] == 75.0
-        assert result["used_pct"] == 25.0
+        assert result is None
 
     @patch.object(GitHubCopilotProvider, "_get_copilot_usage_via_gh")
     def test_no_data(self, mock_usage):
@@ -998,23 +1001,23 @@ class TestTryPersonalViaGhCli:
 class TestFetchOrgCopilotQuota:
     @patch("limitwatch.providers.github_copilot.requests.get")
     def test_other_error_code(self, mock_get):
-        """Test non-200/403/404 HTTP response."""
+        """Billing API unavailable returns safe AI credits error."""
         provider = GitHubCopilotProvider({"githubToken": "tok"})
         mock_get.return_value.status_code = 500
         headers = _make_github_headers("tok")
         result = provider._fetch_org_copilot_quota(headers, "dummy-org")
         assert result["is_error"] is True
-        assert "HTTP 500" in result["message"]
+        assert "AI credits billing usage" in result["message"]
 
     @patch("limitwatch.providers.github_copilot.requests.get")
     def test_exception(self, mock_get):
-        """Test exception during org fetch."""
+        """Billing API exception returns safe AI credits error."""
         provider = GitHubCopilotProvider({"githubToken": "tok"})
         mock_get.side_effect = Exception("Connection reset")
         headers = _make_github_headers("tok")
         result = provider._fetch_org_copilot_quota(headers, "dummy-org")
         assert result["is_error"] is True
-        assert "Connection reset" in result["message"]
+        assert "AI credits billing usage" in result["message"]
 
 
 class TestFetchCopilotInternalUser:
@@ -1041,7 +1044,7 @@ class TestFetchOrgFromInternalUser:
 
     @patch("limitwatch.providers.github_copilot.requests.get")
     def test_no_percent_remaining(self, mock_get):
-        """Org in list but no percent_remaining → defaults."""
+        """Legacy org internal data does not produce quota."""
         provider = GitHubCopilotProvider({"githubToken": "tok"})
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = {
@@ -1050,19 +1053,18 @@ class TestFetchOrgFromInternalUser:
         }
         headers = _make_github_headers("tok")
         result = provider._fetch_org_from_copilot_internal_user(headers, "dummy-org")
-        assert result is not None
-        assert result["remaining_pct"] == 100.0
-        assert result["used_pct"] == 0.0
+        assert result is None
 
 
 class TestTryGhInternalUsage:
     @patch("limitwatch.providers.github_copilot.subprocess.run")
     def test_free_plan(self, mock_run):
+        """Legacy gh internal usage is ignored."""
         provider = GitHubCopilotProvider({})
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = '{"copilot_plan":"free"}'
         result = provider._try_gh_internal_usage()
-        assert result == {"usage_percentage": 0.0}
+        assert result is None
 
     @patch("limitwatch.providers.github_copilot.subprocess.run")
     def test_non_personal_plan(self, mock_run):
@@ -1099,13 +1101,13 @@ class TestTryGhInternalUsage:
 class TestTryGhBillingUsage:
     @patch("limitwatch.providers.github_copilot.subprocess.run")
     def test_success(self, mock_run):
+        """Legacy gh billing usage is ignored."""
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = (
             '{"seat_breakdown":{"total":10,"active_this_cycle":3}}'
         )
         result = GitHubCopilotProvider._try_gh_billing_usage()
-        assert result is not None
-        assert result["usage_percentage"] == 30.0
+        assert result is None
 
     @patch("limitwatch.providers.github_copilot.subprocess.run")
     def test_returncode_nonzero(self, mock_run):
@@ -1130,6 +1132,7 @@ class TestExtractPremiumQuota:
         assert result is None
 
     def test_with_overage(self):
+        """Legacy premium quota data is ignored."""
         provider = GitHubCopilotProvider({})
         result = provider._extract_premium_quota(
             {
@@ -1145,11 +1148,188 @@ class TestExtractPremiumQuota:
                 },
             }
         )
-        assert result is not None
-        assert result["remaining_pct"] == 60.0
-        assert result["used_pct"] == 40.0
-        assert result["limit"] == 100
-        assert result["remaining"] == 60
-        assert result["used"] == 40
-        assert result["overage_used"] == 5
-        assert result["overage_permitted"] is True
+        assert result is None
+
+
+class TestAICreditBillingHelpers:
+    def test_billing_urls(self):
+        usage, summary = _billing_usage_urls("octo", is_org=False)
+        assert usage.endswith("/users/octo/settings/billing/usage")
+        assert summary.endswith("/users/octo/settings/billing/usage/summary")
+        org_usage, _ = _billing_usage_urls("acme", is_org=True)
+        assert org_usage.endswith("/organizations/acme/settings/billing/usage")
+
+    def test_current_month_window(self):
+        start, end = _current_month_window(datetime(2026, 6, 15, tzinfo=timezone.utc))
+        assert start == "2026-06-01"
+        assert end == "2026-07-01"
+
+    def test_parse_billing_prefers_net_quantity_and_preserves_discount(self):
+        parsed = _parse_ai_credit_billing_payload(
+            {
+                "usageItems": [
+                    {
+                        "product": "GitHub Copilot",
+                        "sku": "Copilot AI Credit",
+                        "quantity": 40,
+                        "netQuantity": 25,
+                        "grossAmount": 0.40,
+                        "discountAmount": 0.15,
+                        "netAmount": 0.25,
+                    }
+                ]
+            }
+        )
+        assert parsed["used"] == 25
+        assert parsed["gross_amount"] == 0.40
+        assert parsed["discount_amount"] == 0.15
+        assert parsed["billing_rows"][0]["sku"] == "Copilot AI Credit"
+
+    def test_parse_billing_uses_net_amount_as_credit_fallback(self):
+        parsed = _parse_ai_credit_billing_payload(
+            {
+                "items": [
+                    {
+                        "product": "GitHub Copilot",
+                        "sku": "AI Credit",
+                        "quantity": 999,
+                        "netAmount": 1.23,
+                    }
+                ]
+            }
+        )
+        assert parsed["used"] == 123
+
+    def test_personal_allowance_tiers(self):
+        assert _personal_ai_credit_allowance({"copilot_plan": "pro"}) == 1500
+        assert _personal_ai_credit_allowance({"copilot_plan": "pro+"}) == 7000
+        assert _personal_ai_credit_allowance({"copilot_plan": "max"}) == 20000
+        assert _personal_ai_credit_allowance({"copilot_plan": "business"}) is None
+
+    def test_org_allowance_promo_window(self):
+        promo = datetime(2026, 6, 15, tzinfo=timezone.utc)
+        after = datetime(2026, 9, 2, tzinfo=timezone.utc)
+        assert _org_ai_credit_allowance(10, "business", promo) == 30000
+        assert _org_ai_credit_allowance(10, "enterprise", promo) == 70000
+        assert _org_ai_credit_allowance(10, "business", after) == 19000
+        assert _org_ai_credit_allowance(10, None, after) is None
+
+
+class TestAICreditBillingFetch:
+    @patch("limitwatch.providers.github_copilot.requests.get")
+    def test_personal_credits_summary_precedes_usage_and_estimates_allowance(
+        self, mock_get
+    ):
+        provider = GitHubCopilotProvider(
+            {"githubToken": "tok", "email": "octo", "copilot_plan": "pro+"}
+        )
+
+        def side_effect(url, **kwargs):
+            resp = Mock()
+            resp.status_code = 200
+            if url.endswith("/summary"):
+                resp.json.return_value = {
+                    "usageItems": [
+                        {
+                            "product": "GitHub Copilot",
+                            "sku": "AI Credit",
+                            "netQuantity": 39,
+                        }
+                    ]
+                }
+            elif "copilot_internal" in url:
+                resp.json.return_value = {"copilot_plan": "pro+"}
+            else:
+                resp.json.return_value = {
+                    "usageItems": [
+                        {
+                            "product": "GitHub Copilot",
+                            "sku": "AI Credit",
+                            "netQuantity": 999,
+                        }
+                    ]
+                }
+            return resp
+
+        mock_get.side_effect = side_effect
+        quota = provider._try_personal_via_ai_credits(_make_github_headers("tok"))
+        assert quota["billing_source"] == "summary"
+        assert quota["used"] == 39
+        assert quota["limit"] == 7000
+        assert quota["remaining"] == 6961
+
+    @patch("limitwatch.providers.github_copilot.requests.get")
+    def test_personal_credits_unknown_allowance_usage_only(self, mock_get):
+        provider = GitHubCopilotProvider({"githubToken": "tok", "email": "octo"})
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "usageItems": [
+                {
+                    "product": "GitHub Copilot",
+                    "sku": "AI Credit",
+                    "netQuantity": 12,
+                }
+            ]
+        }
+        quota = provider._try_personal_via_ai_credits(_make_github_headers("tok"))
+        assert quota["used"] == 12
+        assert quota["allowance_unknown"] is True
+        assert quota["show_progress"] is False
+        assert quota["remaining_pct"] == 100.0
+
+    @patch("limitwatch.providers.github_copilot.requests.get")
+    def test_org_credits_estimates_pooled_business_allowance(self, mock_get):
+        provider = GitHubCopilotProvider({"githubToken": "tok"})
+
+        def side_effect(url, **kwargs):
+            resp = Mock()
+            resp.status_code = 200
+            if "settings/billing/usage" in url:
+                resp.json.return_value = {
+                    "usageItems": [
+                        {
+                            "product": "GitHub Copilot",
+                            "sku": "AI Credit",
+                            "netQuantity": 100,
+                        }
+                    ]
+                }
+            else:
+                resp.json.return_value = {
+                    "seat_breakdown": {"total": 5, "active_this_cycle": 5},
+                    "plan_type": "business",
+                }
+            return resp
+
+        mock_get.side_effect = side_effect
+        quota = provider._try_org_via_ai_credits(_make_github_headers("tok"), "acme")
+        assert quota["display_name"] == "acme"
+        assert quota["used"] == 100
+        assert quota["limit"] in (9500, 15000)
+
+    @patch("limitwatch.providers.github_copilot.requests.get")
+    def test_public_billing_403_does_not_fall_back_to_legacy_premium_quota(
+        self, mock_get
+    ):
+        provider = GitHubCopilotProvider({"githubToken": "tok", "email": "octo"})
+
+        def side_effect(url, **kwargs):
+            resp = Mock()
+            if "settings/billing/usage" in url:
+                resp.status_code = 403
+                return resp
+            if "copilot_internal/user" in url:
+                resp.status_code = 200
+                resp.json.return_value = {
+                    "copilot_plan": "individual",
+                    "quota_snapshots": {
+                        "premium_interactions": {"percent_remaining": 80.0}
+                    },
+                }
+                return resp
+            resp.status_code = 404
+            return resp
+
+        mock_get.side_effect = side_effect
+        quota = provider._fetch_personal_copilot_quota(_make_github_headers("tok"))
+        assert quota is None
