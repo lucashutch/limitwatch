@@ -107,7 +107,7 @@ def _current_month_window(now: Optional[datetime] = None) -> Tuple[str, str]:
 
 def _billing_usage_urls(owner: str, is_org: bool) -> Tuple[str, str]:
     """Build public billing usage and summary URLs."""
-    owner_path = f"organizations/{owner}" if is_org else f"users/{owner}"
+    owner_path = f"orgs/{owner}" if is_org else f"users/{owner}"
     base = f"https://api.github.com/{owner_path}/settings/billing/usage"
     return base, f"{base}/summary"
 
@@ -163,7 +163,15 @@ def _parse_ai_credit_billing_payload(
     parsed_rows = []
     for row in rows:
         row_used = None
-        for key in ("netQuantity", "net_quantity"):
+        for key in (
+            "netQuantity",
+            "net_quantity",
+            "quantity",
+            "usageQuantity",
+            "usage_quantity",
+            "billedQuantity",
+            "billed_quantity",
+        ):
             if isinstance(row.get(key), (int, float)):
                 row_used = float(row[key])
                 break
@@ -171,11 +179,6 @@ def _parse_ai_credit_billing_payload(
             for key in ("netAmount", "net_amount"):
                 row_used = _credits_from_amount(row.get(key))
                 if row_used is not None:
-                    break
-        if row_used is None:
-            for key in ("quantity", "usageQuantity", "amount"):
-                if isinstance(row.get(key), (int, float)):
-                    row_used = float(row[key])
                     break
         if row_used is None:
             row_used = 0.0
@@ -276,12 +279,15 @@ def _build_ai_credit_quota(
     if allowance and allowance > 0:
         remaining = max(0.0, allowance - used)
         used_pct = max(0.0, min(100.0, (used / allowance) * 100))
+        used_label = f"{used:,.0f}" if float(used).is_integer() else f"{used:,.1f}"
+        usage_label = f"{used_label} cr ({used_pct:.1f}%)"
         quota.update(
             {
                 "limit": allowance,
                 "remaining": remaining,
                 "used_pct": used_pct,
                 "remaining_pct": max(0.0, 100.0 - used_pct),
+                "usage_label": usage_label,
             }
         )
     else:
@@ -291,10 +297,62 @@ def _build_ai_credit_quota(
                 "remaining_pct": 100.0,
                 "show_progress": False,
                 "allowance_unknown": True,
+                "usage_label": f"{used:,.0f} cr"
+                if float(used).is_integer()
+                else f"{used:,.1f} cr",
             }
         )
     quota.update(metadata)
     return quota
+
+
+def _parse_internal_ai_credit_snapshot(
+    internal_data: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Parse VS Code-style Copilot AI credit quota from copilot_internal/user."""
+    snapshots = internal_data.get("quota_snapshots") or {}
+    premium = snapshots.get("premium_interactions") or {}
+    if (
+        not premium
+        or premium.get("unlimited") is True
+        or not premium.get("has_quota", True)
+    ):
+        return None
+
+    entitlement = premium.get("entitlement")
+    remaining = premium.get("quota_remaining", premium.get("remaining"))
+    percent_remaining = premium.get("percent_remaining")
+
+    used = None
+    allowance = (
+        entitlement
+        if isinstance(entitlement, (int, float)) and entitlement > 0
+        else None
+    )
+    if allowance is not None and isinstance(remaining, (int, float)):
+        used = max(0.0, float(allowance) - float(remaining))
+    elif allowance is not None and isinstance(percent_remaining, (int, float)):
+        used = max(0.0, float(allowance) * (100.0 - float(percent_remaining)) / 100.0)
+    elif isinstance(premium.get("overage_count"), (int, float)):
+        used = float(premium["overage_count"])
+
+    if used is None:
+        return None
+
+    reset = (
+        internal_data.get("quota_reset_date_utc")
+        or internal_data.get("quota_reset_date")
+        or _next_month_reset_iso()
+    )
+    return {
+        "used": used,
+        "allowance": int(allowance) if allowance is not None else None,
+        "reset": reset,
+        "billing_source": "copilot_internal_user",
+        "billing_model": "ai_credits",
+        "token_based_billing": internal_data.get("token_based_billing"),
+        "quota_snapshot": premium,
+    }
 
 
 class GitHubCopilotProvider(BaseProvider):
@@ -704,15 +762,14 @@ class GitHubCopilotProvider(BaseProvider):
     def _fetch_billing_credit_usage(
         self, headers: Dict[str, str], owner: str, is_org: bool
     ) -> Optional[Dict[str, Any]]:
-        """Fetch and parse public billing usage/summary APIs; summary wins."""
+        """Fetch and parse public billing usage API; summary is best-effort fallback."""
         usage_url, summary_url = _billing_usage_urls(owner, is_org)
         start_date, end_date = _current_month_window()
         params = {"start_date": start_date, "end_date": end_date}
-        parsed_usage = None
 
-        for url, source in ((summary_url, "summary"), (usage_url, "usage")):
+        for url, source in ((usage_url, "usage"), (summary_url, "summary")):
             if not self.has_time_remaining():
-                return parsed_usage
+                return None
             try:
                 resp = requests.get(
                     url,
@@ -726,12 +783,10 @@ class GitHubCopilotProvider(BaseProvider):
                 if parsed:
                     parsed["billing_source"] = source
                     parsed["billing_window"] = {"start": start_date, "end": end_date}
-                    if source == "summary":
-                        return parsed
-                    parsed_usage = parsed
+                    return parsed
             except Exception:
                 continue
-        return parsed_usage
+        return None
 
     def _try_personal_via_ai_credits(
         self, headers: Dict[str, str]
@@ -745,7 +800,7 @@ class GitHubCopilotProvider(BaseProvider):
         if not billing:
             return None
 
-        internal = self._fetch_copilot_internal_user(headers)
+        internal = self._fetch_copilot_internal_user(headers) or {}
         allowance = _personal_ai_credit_allowance(internal, self.account_data)
         quota = _build_ai_credit_quota(
             "GitHub Copilot Personal",
@@ -809,7 +864,34 @@ class GitHubCopilotProvider(BaseProvider):
         """Try public organization billing AI credits APIs."""
         start = time.perf_counter()
         billing = self._fetch_billing_credit_usage(headers, organization, is_org=True)
+        internal = self._fetch_copilot_internal_user(headers) or {}
         if not billing:
+            internal_orgs = {
+                org.get("login")
+                for org in internal.get("organization_list", [])
+                if isinstance(org, dict)
+            }
+            internal_orgs.update(internal.get("organization_login_list") or [])
+            if organization in internal_orgs:
+                snapshot = _parse_internal_ai_credit_snapshot(internal)
+                if snapshot:
+                    quota = _build_ai_credit_quota(
+                        f"GitHub Copilot Org ({organization})",
+                        organization,
+                        snapshot["used"],
+                        snapshot["allowance"],
+                        snapshot["reset"],
+                        **{
+                            k: v
+                            for k, v in snapshot.items()
+                            if k not in {"used", "allowance", "reset"}
+                        },
+                    )
+                    self.record_timing(
+                        "github_copilot_org_internal_ai_credits",
+                        (time.perf_counter() - start) * 1000,
+                    )
+                    return quota
             return None
 
         seats = None
@@ -829,7 +911,10 @@ class GitHubCopilotProvider(BaseProvider):
         except Exception:
             pass
 
+        internal_snapshot = _parse_internal_ai_credit_snapshot(internal)
         allowance = _org_ai_credit_allowance(seats, plan)
+        if not allowance and internal_snapshot:
+            allowance = internal_snapshot.get("allowance")
         quota = _build_ai_credit_quota(
             f"GitHub Copilot Org ({organization})",
             organization,
