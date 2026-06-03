@@ -370,13 +370,17 @@ class DisplayManager:
                 continue
 
             if q.get("show_progress", True) is False:
-                self.console.print(f"{prefix}{name}")
+                usage_label = q.get("usage_label")
+                suffix = f" {usage_label}" if usage_label else ""
+                self.console.print(f"{prefix}{name}{suffix}")
                 continue
 
             bar_color = get_bar_color(shown_pct, is_used)
             bar = render_compact_bar(shown_pct, bar_width, bar_color)
             reset_str = get_reset_string(q.get("reset") or "Unknown", remaining_pct)
-            suffix = f"{shown_pct:5.1f}% used" if is_used else f"{shown_pct:5.1f}%"
+            suffix = q.get("usage_label") or (
+                f"{shown_pct:5.1f}% used" if is_used else f"{shown_pct:5.1f}%"
+            )
             self.console.print(f"{prefix}{name[:18]:18} {bar} {suffix}{reset_str}")
 
     def _draw_normal(self, filtered_quotas, client):
@@ -399,13 +403,17 @@ class DisplayManager:
                 continue
 
             if q.get("show_progress", True) is False:
-                self.console.print(f"{styled_name}")
+                usage_label = q.get("usage_label")
+                suffix = f" {usage_label}" if usage_label else ""
+                self.console.print(f"{styled_name}{suffix}")
                 continue
 
             bar_color = get_bar_color(shown_pct, is_used)
             bar = render_normal_bar(shown_pct, bar_width, bar_color)
             reset_str = get_reset_string(q.get("reset") or "Unknown", remaining_pct)
-            suffix = f"{shown_pct:5.1f}% used" if is_used else f"{shown_pct:5.1f}%"
+            suffix = q.get("usage_label") or (
+                f"{shown_pct:5.1f}% used" if is_used else f"{shown_pct:5.1f}%"
+            )
             self.console.print(f"{styled_name} {bar} {suffix}{reset_str}")
 
     def _print_error_quota(self, styled_name, quota):
