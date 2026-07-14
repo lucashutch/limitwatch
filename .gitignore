@@ -42,3 +42,6 @@ antigravity-accounts.json
 # tests/data/
 
 .coverage
+
+# Rust build artifacts
+limitwatch-rs/target/

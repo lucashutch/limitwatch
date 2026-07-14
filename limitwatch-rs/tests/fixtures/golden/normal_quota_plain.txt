@@ -1,0 +1,3 @@
+📧 OpenAI Codex: work (me@example.com|team)
+Remaining              ██████████████████████▌         75.0%
+Used                   ███████▌                        25.0% used

@@ -1,0 +1,8 @@
+{
+  "accounts": [
+    {"type":"google","email":"user@example.com","refreshToken":"secret","alias":"main","group":"work","projectId":"p","futureField":{"x":1}},
+    {"type":"github_copilot","email":"octo","github_account":"octo","githubToken":"secret2"}
+  ],
+  "activeIndex": 1,
+  "futureRoot": true
+}
