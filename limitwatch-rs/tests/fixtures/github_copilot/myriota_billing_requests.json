@@ -1,15 +1,13 @@
 {
   "billing_paths": [
-    "/users/Lucashutch/settings/billing/usage/summary",
-    "/users/Lucashutch/settings/billing/usage/summary",
     "/users/Lucashutch/settings/billing/usage",
     "/users/Lucashutch/settings/billing/usage",
-    "/organizations/Myriota/settings/billing/usage/summary",
-    "/organizations/Myriota/settings/billing/usage/summary",
-    "/organizations/Myriota/settings/billing/usage",
-    "/organizations/Myriota/settings/billing/usage"
+    "/users/Lucashutch/settings/billing/usage/summary",
+    "/orgs/Myriota/settings/billing/usage",
+    "/orgs/Myriota/settings/billing/usage",
+    "/orgs/Myriota/settings/billing/usage/summary"
   ],
-  "queries": ["filtered", "unfiltered", "filtered", "unfiltered", "filtered", "unfiltered", "filtered", "unfiltered"],
+  "queries": ["filtered", "unfiltered", "filtered", "filtered", "unfiltered", "filtered"],
   "interstitial_paths": [
     "/copilot_internal/user",
     "/orgs/Myriota/copilot/billing"

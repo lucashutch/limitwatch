@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
-    fs,
+    env, fs,
     io::Write,
     path::{Path, PathBuf},
 };
@@ -73,6 +73,12 @@ impl Config {
 }
 
 pub fn default_config_dir() -> PathBuf {
+    if let Some(path) = env::var_os("LIMITWATCH_CONFIG_DIR") {
+        return PathBuf::from(path);
+    }
+    if let Some(path) = env::var_os("XDG_CONFIG_HOME") {
+        return PathBuf::from(path).join("limitwatch");
+    }
     dirs::home_dir()
         .unwrap_or_default()
         .join(".config/limitwatch")

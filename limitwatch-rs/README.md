@@ -1,8 +1,9 @@
 # LimitWatch (Rust)
 
 This directory is a self-contained Rust reimplementation of the Python
-LimitWatch CLI. It monitors Chutes.ai, GitHub Copilot, OpenAI Codex, and
-OpenRouter. Google is intentionally omitted from the Rust implementation.
+LimitWatch CLI. It monitors GitHub Copilot, OpenAI Codex, and OpenRouter.
+Chutes is intentionally omitted from the Rust implementation. Google records
+are preserved for compatibility but Google is intentionally unsupported here.
 
 ## Build and install
 
@@ -34,14 +35,16 @@ accepts the same show options:
 -c, --compact            Compact output
 -j, --json               Machine-readable output
 -l, --login              Add/update an account
-    --project-id <ID>    Set Google project metadata with --account
+    --project-id <ID>    Set project metadata with --account
     --logout             Remove the selected account
     --logout-all         Remove all accounts
     --no-record          Do not write this fetch to history
     --verbose            Enable verbose mode
     --timings            Include timings in JSON
-    --max-age-ms <MS>    Overall fetch deadline (default 4000)
-    --cache-ttl <SEC>    Override cached-quota lifetime
+    --max-age-ms <MS>    Overall fetch deadline (Rust extension, default 4000)
+    --cache-ttl <SEC>    Override cached-quota lifetime (Rust extension)
+    --select-account <ID>  Make one supported account active (Rust extension)
+    -v, --version          Report the Rust CLI version
 ```
 
 Metadata values `none` or an empty value clear the field. Explicit account
@@ -51,7 +54,7 @@ Other commands:
 
 * `history [--preset 24h|7d|30d|90d] [--since TIME] [--until TIME]
   [-a ACCOUNT] [-p PROVIDER] [-q QUOTA] [--table] [--summary]
-  [--view heatmap|chart|calendar|bars|stats]`
+  [--heatmap|--chart|--calendar|--bars|--stats]`
 * `export [--format csv|markdown] [-o PATH]` with the same time/account/provider/
   quota filters. The default range is 7 days; output goes to stdout unless a
   path is supplied.
@@ -72,18 +75,24 @@ limitwatch export --format markdown --output quotas.md
 Bare `--login` prompts for a provider on a terminal and defaults to GitHub
 Copilot when non-interactive. `--provider` selects explicitly. Discovery is
 preferred; `LIMITWATCH_LOGIN_JSON` can supply explicit sanitized input.
+`--logout` confirms the selected account interactively; JSON and piped use
+returns an explicit error rather than reading confirmation input. `--logout-all` retains
+its interactive confirmation unless JSON output is requested.
 
 ```sh
-LIMITWATCH_LOGIN_JSON='{"apiKey":"..."}' limitwatch --login --provider chutes
+LIMITWATCH_LOGIN_JSON='{"apiKey":"..."}' limitwatch --login --provider openrouter
 ```
 
-* **Chutes.ai** (`chutes`): `apiKey`, validated using `/users/me`.
 * **GitHub Copilot** (`github_copilot`): optional `githubToken`; if omitted,
   the authenticated `gh auth token` is used. The `gh` CLI must then be installed
   and logged in.
 * **OpenAI Codex** (`openai`): `accessToken`, with optional `email`, validated
   against ChatGPT usage.
 * **OpenRouter** (`openrouter`): `apiKey`, with optional account `name`.
+
+The Rust CLI rejects `google` and `chutes` provider requests. Existing Google
+records remain in `accounts.json` but are ignored by Rust selection, fetching,
+history filters, and completions.
 
 ## Shared data and compatibility
 
@@ -98,8 +107,9 @@ temporary file and atomic replacement. A custom history path may begin with
 `~/`. Back up shared files before switching versions during evaluation.
 
 Existing Google records are preserved on normal saves but ignored by Rust
-selection, fetching, history filters, and completions. `--refresh` bypasses
-caches and refreshes tokens where supported; `--verbose` diagnostics are
+selection, fetching, history filters, and completions. `--refresh` requests
+provider/token refresh work where supported, while a fresh quota cache remains
+available as a timeout fallback; `--verbose` diagnostics are
 credential-redacted. JSON/redirected output is ANSI-free and color honors
 `NO_COLOR`.
 
@@ -146,14 +156,11 @@ the sanitized diff; preserve explicit divergences such as Google omission.
 
 ## Known compatibility limits
 
-The Python implementation remains the behavioral reference. The Rust login
-path does not yet launch browser OAuth, perform Google project discovery,
-discover local OpenAI credentials, refresh OAuth tokens, or run OpenAI device
-authorization; credentials must be supplied as described above. GitHub login
-depends on an available `gh` executable when no token is supplied. Provider
-APIs, OAuth policies, network access, and external CLI versions can therefore
-affect live parity. Rendering is plain text rather than Rich terminal styling.
-`--refresh` and `--verbose` are accepted but currently do not add behavior, and
-the Google fetch path uses a stored access token rather than exchanging its
-stored refresh token. Validate on representative copies of real data before
-relying on cross-version write compatibility.
+The Python implementation remains the behavioral reference. Google OAuth and
+project discovery remain intentionally outside this Rust rewrite. OpenAI
+supports local credential files, device authorization, bounded token polling,
+and refresh-on-401; GitHub login depends on an available `gh` executable when
+no token is supplied. Provider APIs, OAuth policies, network access, and
+external CLI versions can therefore affect live parity. Rendering is plain text
+rather than Rich terminal styling. Validate on representative copies of real
+data before relying on cross-version write compatibility.

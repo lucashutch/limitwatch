@@ -134,6 +134,10 @@ impl AuthManager {
                 ("alias", false) => a.alias = value.clone(),
                 ("group", true) => a.group = None,
                 ("group", false) => a.group = value.clone(),
+                ("projectId", true) => a.project_id = None,
+                ("projectId", false) => a.project_id = value.clone(),
+                ("managedProjectId", true) => a.managed_project_id = None,
+                ("managedProjectId", false) => a.managed_project_id = value.clone(),
                 (_, true) => {
                     a.extra.remove(key);
                 }
@@ -150,6 +154,27 @@ impl AuthManager {
     }
 }
 fn load(path: &Path) -> Option<AccountsFile> {
-    let data: AccountsFile = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
-    data.accounts.iter().all(Account::validate).then_some(data)
+    let mut root = serde_json::from_slice::<Value>(&fs::read(path).ok()?).ok()?;
+    let object = root.as_object_mut()?;
+    let accounts = object
+        .remove("accounts")
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|value| serde_json::from_value::<Account>(value).ok())
+        .collect();
+    let active_index = object
+        .remove("activeIndex")
+        .and_then(|value| value.as_u64())
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_default();
+    let extra = object
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    Some(AccountsFile {
+        accounts,
+        active_index,
+        extra,
+    })
 }

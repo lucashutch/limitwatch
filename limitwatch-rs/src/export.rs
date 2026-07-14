@@ -55,9 +55,9 @@ impl Exporter<'_> {
                 x.provider_type,
                 x.quota_name,
                 x.display_name.unwrap_or_default(),
-                x.remaining_pct.map(|v| v.to_string()).unwrap_or_default(),
-                x.used.map(|v| v.to_string()).unwrap_or_default(),
-                x.limit_val.map(|v| v.to_string()).unwrap_or_default(),
+                x.remaining_pct.map(python_float).unwrap_or_default(),
+                x.used.map(python_float).unwrap_or_default(),
+                x.limit_val.map(python_float).unwrap_or_default(),
                 x.reset_time.unwrap_or_default(),
             ];
             out.push_str(
@@ -78,7 +78,7 @@ impl Exporter<'_> {
         }
         let mut o = format!(
             "# Quota History Export\n\nGenerated: {}\n\n",
-            Local::now().to_rfc3339()
+            Local::now().format("%Y-%m-%dT%H:%M:%S%.f")
         );
         if [
             f.preset,
@@ -156,5 +156,13 @@ fn csv_field(v: &str) -> String {
         format!("\"{}\"", v.replace('"', "\"\""))
     } else {
         v.to_owned()
+    }
+}
+
+fn python_float(value: f64) -> String {
+    if value.is_finite() && value.fract() == 0.0 {
+        format!("{value:.1}")
+    } else {
+        value.to_string()
     }
 }

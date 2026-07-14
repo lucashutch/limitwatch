@@ -14,7 +14,7 @@ Stack: Python 3.11+ (Click/Rich/requests) and a self-contained Rust rewrite (Cla
 - `src/limitwatch/quota_client.py` — provider registry and quota-fetch orchestration.
 - `src/limitwatch/providers/base.py` — provider contract and shared quota model.
 - `limitwatch-rs/src/main.rs` / `cli.rs` — Rust binary entry point and command surface.
-- `limitwatch-rs/src/quota_client.rs` / `providers/` — Rust registry for Chutes, GitHub Copilot, OpenAI, and OpenRouter; Google records are preserved but ignored.
+- `limitwatch-rs/src/quota_client.rs` / `providers/` — Rust registry for GitHub Copilot, OpenAI, and OpenRouter; Chutes is removed and Google records are preserved but ignored.
 - `limitwatch-rs/src/{auth,config,storage,history,export}.rs` — shared JSON/SQLite compatibility and exports.
 
 ## Commands
@@ -31,5 +31,5 @@ Stack: Python 3.11+ (Click/Rich/requests) and a self-contained Rust rewrite (Cla
 - Accounts/config are persisted at `~/.config/limitwatch/accounts.json`; never expose stored credentials.
 - Python packaging uses a `src/` layout and a VCS-derived version.
 - Rust and Python default to `~/.config/limitwatch/{accounts.json,config.json,history.db}`; back up shared data and never expose credentials.
-- Rust live-auth limitations and external `gh`/OAuth prerequisites are documented in `limitwatch-rs/README.md`.
+- Rust live-auth limitations, supported providers, and external `gh`/OAuth prerequisites are documented in `limitwatch-rs/README.md`.
 - Sanitized offline parity expectations live in `limitwatch-rs/tests/fixtures/parity/`.

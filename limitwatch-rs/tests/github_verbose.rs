@@ -19,10 +19,7 @@ fn request_contract_is_verbose_only_and_excludes_sensitive_fields() {
         "github_request",
         &[
             ("method", json!("GET")),
-            (
-                "path",
-                json!("/organizations/<redacted>/settings/billing/usage"),
-            ),
+            ("path", json!("/orgs/<redacted>/settings/billing/usage")),
             ("status", json!(404)),
             ("token", json!("token-secret")),
             ("Authorization", json!("Bearer header-secret")),
@@ -36,7 +33,7 @@ fn request_contract_is_verbose_only_and_excludes_sensitive_fields() {
     let output = github_verbose(true, &traces).join("\n");
     assert_eq!(
         output,
-        "[GitHub] \"GET\" \"/organizations/<redacted>/settings/billing/usage\" status=404"
+        "[GitHub] \"GET\" \"/orgs/<redacted>/settings/billing/usage\" status=404"
     );
     for secret in [
         "token-secret",

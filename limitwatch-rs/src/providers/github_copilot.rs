@@ -3,9 +3,17 @@ use crate::model::{Account, Quota, Timing};
 use anyhow::Context;
 use chrono::{Datelike, Months, TimeZone, Utc};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 type BillingResult = (Option<(Value, &'static str, bool)>, Option<String>);
+
+fn number(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|s| s.trim().parse::<f64>().ok()))
+        .filter(|value| value.is_finite())
+}
 
 pub struct GitHubCopilotProvider {
     a: Account,
@@ -16,9 +24,18 @@ impl GitHubCopilotProvider {
         Self { a, t: vec![] }
     }
     pub fn parse_billing(v: &Value, allowance: Option<f64>) -> Option<Quota> {
-        fn walk(v: &Value, used: &mut f64, found: &mut bool) {
+        fn walk(
+            v: &Value,
+            used: &mut f64,
+            found: &mut bool,
+            gross_amount: &mut f64,
+            discount_amount: &mut f64,
+            net_amount: &mut f64,
+        ) {
             match v {
-                Value::Array(a) => a.iter().for_each(|x| walk(x, used, found)),
+                Value::Array(a) => a
+                    .iter()
+                    .for_each(|x| walk(x, used, found, gross_amount, discount_amount, net_amount)),
                 Value::Object(o) => {
                     let text = [
                         "product",
@@ -45,15 +62,30 @@ impl GitHubCopilotProvider {
                             "net_quantity",
                         ]
                         .iter()
-                        .find_map(|k| o.get(*k).and_then(Value::as_f64));
+                        .find_map(|k| o.get(*k).and_then(number));
                         let amount = ["netAmount", "net_amount"]
                             .iter()
-                            .find_map(|k| o.get(*k).and_then(Value::as_f64))
+                            .find_map(|k| o.get(*k).and_then(number))
                             .map(|n| n / 0.01);
                         let fallback = ["quantity", "usageQuantity", "amount"]
                             .iter()
-                            .find_map(|k| o.get(*k).and_then(Value::as_f64));
+                            .find_map(|k| o.get(*k).and_then(number));
                         *used += quantity.or(amount).or(fallback).unwrap_or(0.);
+                        *gross_amount += o
+                            .get("grossAmount")
+                            .or_else(|| o.get("gross_amount"))
+                            .and_then(number)
+                            .unwrap_or(0.);
+                        *discount_amount += o
+                            .get("discountAmount")
+                            .or_else(|| o.get("discount_amount"))
+                            .and_then(number)
+                            .unwrap_or(0.);
+                        *net_amount += o
+                            .get("netAmount")
+                            .or_else(|| o.get("net_amount"))
+                            .and_then(number)
+                            .unwrap_or(0.);
                     }
                     for key in [
                         "usageItems",
@@ -64,7 +96,14 @@ impl GitHubCopilotProvider {
                         "lineItems",
                     ] {
                         if let Some(child) = o.get(key) {
-                            walk(child, used, found);
+                            walk(
+                                child,
+                                used,
+                                found,
+                                gross_amount,
+                                discount_amount,
+                                net_amount,
+                            );
                         }
                     }
                 }
@@ -72,13 +111,21 @@ impl GitHubCopilotProvider {
             }
         }
         let (mut used, mut found) = (0., false);
-        walk(v, &mut used, &mut found);
+        let (mut gross_amount, mut discount_amount, mut net_amount) = (0., 0., 0.);
+        walk(
+            v,
+            &mut used,
+            &mut found,
+            &mut gross_amount,
+            &mut discount_amount,
+            &mut net_amount,
+        );
         if !found {
             return None;
         }
         let allowance = allowance.or_else(|| {
             v.pointer("/copilot/premium_requests/entitlement")
-                .and_then(Value::as_f64)
+                .and_then(number)
         });
         let mut q = quota(
             "GitHub Copilot AI Credits",
@@ -86,14 +133,31 @@ impl GitHubCopilotProvider {
             "GitHub Copilot",
         );
         q.used = Some(used);
+        extra(&mut q, "gross_amount", gross_amount);
+        extra(&mut q, "discount_amount", discount_amount);
+        extra(&mut q, "net_amount", net_amount);
+        let used_label = if used.fract() == 0. {
+            format!("{used:.0}")
+        } else {
+            format!("{used:.1}")
+        };
         if let Some(limit) = allowance.filter(|x| *x > 0.) {
             q.limit = Some(limit);
-            q.remaining = Some(limit - used);
-            q.used_pct = Some(used / limit * 100.);
-            q.remaining_pct = Some(100. - q.used_pct.unwrap());
+            let used_pct = (used / limit * 100.).clamp(0., 100.);
+            q.remaining = Some((limit - used).max(0.));
+            q.used_pct = Some(used_pct);
+            q.remaining_pct = Some(100. - used_pct);
+            extra(
+                &mut q,
+                "usage_label",
+                format!("{used_label} cr ({used_pct:.1}%)"),
+            );
         } else {
+            q.used_pct = Some(0.);
             q.remaining_pct = Some(100.);
             extra(&mut q, "show_progress", false);
+            extra(&mut q, "allowance_unknown", true);
+            extra(&mut q, "usage_label", format!("{used_label} cr"));
         }
         if let Some(r) = v
             .get("reset_at")
@@ -179,37 +243,89 @@ impl GitHubCopilotProvider {
     }
     fn parse_internal_org(v: &Value, organization: &str) -> Option<Quota> {
         let matches_org = v
-            .get("organization_login_list")?
-            .as_array()?
-            .iter()
-            .filter_map(Value::as_str)
-            .any(|org| org.eq_ignore_ascii_case(organization));
+            .get("organization_login_list")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|org| {
+                org.as_str()
+                    .or_else(|| org.get("login").and_then(Value::as_str))
+                    .is_some_and(|login| login.trim().eq_ignore_ascii_case(organization.trim()))
+            })
+            || v.get("organization_list")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|org| {
+                    org.as_str()
+                        .or_else(|| org.get("login").and_then(Value::as_str))
+                        .is_some_and(|login| login.trim().eq_ignore_ascii_case(organization.trim()))
+                });
         if !matches_org {
             return None;
         }
         let premium = v.pointer("/quota_snapshots/premium_interactions")?;
-        let entitlement = premium.get("entitlement")?.as_f64()?;
-        let remaining = premium.get("remaining")?.as_f64()?;
-        if !entitlement.is_finite() || !remaining.is_finite() || entitlement <= 0.0 {
+        if premium.get("unlimited").and_then(Value::as_bool) == Some(true)
+            || premium.get("has_quota").and_then(Value::as_bool) == Some(false)
+        {
             return None;
         }
+        let entitlement = premium.get("entitlement").and_then(number)?;
+        if !entitlement.is_finite() || entitlement <= 0.0 {
+            return None;
+        }
+        let remaining = premium
+            .get("quota_remaining")
+            .or_else(|| premium.get("remaining"))
+            .and_then(number)
+            .filter(|n| n.is_finite())
+            .or_else(|| {
+                premium
+                    .get("percent_remaining")
+                    .and_then(number)
+                    .filter(|n| n.is_finite())
+                    .map(|p| entitlement * p.clamp(0., 100.) / 100.)
+            });
         let used = premium
             .get("used")
-            .and_then(Value::as_f64)
+            .and_then(number)
             .filter(|n| n.is_finite())
-            .unwrap_or_else(|| (entitlement - remaining).max(0.0));
+            .or_else(|| remaining.map(|left| (entitlement - left).max(0.)))
+            .or_else(|| premium.get("overage_count").and_then(number))?;
+        let remaining = remaining.unwrap_or_else(|| (entitlement - used).max(0.));
+        let used = used.clamp(0., entitlement);
         let mut q = quota(
             &format!("GitHub Copilot Org ({organization})"),
             organization,
             "GitHub Copilot",
         );
         q.limit = Some(entitlement);
-        q.remaining = Some(remaining);
+        q.remaining = Some(remaining.clamp(0., entitlement));
         q.used = Some(used);
-        q.used_pct = Some(used / entitlement * 100.0);
-        q.remaining_pct = Some(100.0 - q.used_pct.unwrap());
-        q.reset_time = Some(v.get("quota_reset_date")?.as_str()?.into());
+        let used_pct = (used / entitlement * 100.0).clamp(0., 100.);
+        q.used_pct = Some(used_pct);
+        q.remaining_pct = Some(100.0 - used_pct);
+        q.reset_time = v
+            .get("quota_reset_date_utc")
+            .or_else(|| v.get("quota_reset_date"))
+            .and_then(normalize_reset)
+            .or_else(|| Some(Self::reset()));
         extra(&mut q, "billing_model", "ai_credits");
+        extra(&mut q, "billing_source", "copilot_internal_user");
+        if let Some(value) = v.get("token_based_billing") {
+            extra(&mut q, "token_based_billing", value.clone());
+        }
+        extra(&mut q, "quota_snapshot", premium.clone());
+        let used_label = if used.fract() == 0. {
+            format!("{used:.0}")
+        } else {
+            format!("{used:.1}")
+        };
+        extra(
+            &mut q,
+            "usage_label",
+            format!("{used_label} cr ({used_pct:.1}%)"),
+        );
         Some(q)
     }
     fn billing(
@@ -221,21 +337,45 @@ impl GitHubCopilotProvider {
         traces: &mut Vec<Timing>,
     ) -> anyhow::Result<BillingResult> {
         let (y, m) = Self::month();
+        let start = Utc
+            .with_ymd_and_hms(y, m, 1, 0, 0, 0)
+            .single()
+            .unwrap()
+            .date_naive();
+        let end = if m == 12 {
+            Utc.with_ymd_and_hms(y + 1, 1, 1, 0, 0, 0).single().unwrap()
+        } else {
+            Utc.with_ymd_and_hms(y, m + 1, 1, 0, 0, 0).single().unwrap()
+        }
+        .date_naive();
         let root = if org {
-            format!("organizations/{owner}")
+            format!("orgs/{owner}")
         } else {
             format!("users/{owner}")
         };
         let base = format!("https://api.github.com/{root}/settings/billing/usage");
-        let (mut usage, mut empty, mut diagnostic) = (None, None, None);
-        for (url, source) in [(format!("{base}/summary"), "summary"), (base, "usage")] {
+        let (usage, mut empty, mut diagnostic) = (None, None, None);
+        for (url, source) in [
+            (base.clone(), "usage"),
+            (format!("{base}/summary"), "summary"),
+        ] {
             for filtered in [true, false] {
                 let q = if filtered {
-                    format!("year={y}&month={m}&product=copilot&sku=copilot_ai_credits")
+                    format!(
+                        "year={y}&month={m}&start_date={start}&end_date={end}&product=copilot&sku=copilot_ai_credits"
+                    )
                 } else {
-                    format!("year={y}&month={m}")
+                    format!("year={y}&month={m}&start_date={start}&end_date={end}")
                 };
-                let r = Self::traced_request(c, x, format!("{url}?{q}"), token, traces)?;
+                let r = match Self::traced_request(c, x, format!("{url}?{q}"), token, traces) {
+                    Ok(response) => response,
+                    Err(_) => {
+                        diagnostic.get_or_insert_with(|| {
+                            "GitHub billing unavailable: transport error. Check billing access, rate limits, and organization SSO authorization.".into()
+                        });
+                        continue;
+                    }
+                };
                 if r.status != 200 {
                     diagnostic.get_or_insert_with(|| {
                         Self::billing_diagnostic(
@@ -246,7 +386,7 @@ impl GitHubCopilotProvider {
                     continue;
                 }
                 if Self::parse_billing(&r.body, None).is_some() {
-                    usage = Some((r.body, source, filtered));
+                    return Ok((Some((r.body, source, filtered)), None));
                 } else {
                     empty = Some((r.body, source, filtered));
                 }
@@ -260,7 +400,7 @@ impl GitHubCopilotProvider {
     }
     fn billing_diagnostic(status: u16, detail: Option<&str>) -> String {
         let detail = detail
-            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+            .map(sanitize_diagnostic)
             .filter(|s| !s.is_empty())
             .map(|s| s.chars().take(160).collect::<String>());
         format!(
@@ -279,7 +419,8 @@ impl GitHubCopilotProvider {
         );
         let output = p.run("gh", &args, x.remaining(Duration::from_secs(6))?)?;
         if !output.success {
-            let diagnostic = output.stderr.lines().next().unwrap_or("unknown error");
+            let diagnostic =
+                sanitize_diagnostic(output.stderr.lines().next().unwrap_or("unknown error"));
             let diagnostic: String = diagnostic.chars().take(200).collect();
             anyhow::bail!("`gh auth token` failed: {diagnostic}")
         }
@@ -315,9 +456,24 @@ impl GitHubCopilotProvider {
         url: String,
         token: &str,
     ) -> anyhow::Result<HttpResponse> {
-        let mut headers = bearer(token);
+        let internal = url == "https://api.github.com/copilot_internal/user";
+        let mut headers = if internal {
+            BTreeMap::from([
+                ("Authorization".into(), format!("token {token}")),
+                ("Content-Type".into(), "application/json".into()),
+            ])
+        } else {
+            bearer(token)
+        };
         headers.insert("Accept".into(), "application/vnd.github+json".into());
-        headers.insert("X-GitHub-Api-Version".into(), "2026-03-10".into());
+        headers.insert(
+            "X-GitHub-Api-Version".into(),
+            if internal {
+                "2025-04-01".into()
+            } else {
+                "2026-03-10".into()
+            },
+        );
         headers.insert("User-Agent".into(), "limitwatch".into());
         checked(
             c,
@@ -419,6 +575,7 @@ impl Provider for GitHubCopilotProvider {
                     .body
                     .get("message")
                     .and_then(Value::as_str)
+                    .map(sanitize_diagnostic)
                     .map(|s| s.chars().take(200).collect::<String>());
                 let hint = if r.status == 403 {
                     " Check token scopes, rate limits, and organization SSO authorization."
@@ -498,23 +655,34 @@ impl Provider for GitHubCopilotProvider {
             )
             .ok()
             .filter(|r| r.status == 200);
-            if let Some(org) = self.a.extra.get("organization").and_then(Value::as_str) {
-                if let Some(q) = internal
-                    .as_ref()
-                    .and_then(|response| Self::parse_internal_org(&response.body, org))
-                {
-                    let mut extra = std::collections::BTreeMap::new();
-                    extra.insert(
-                        "outcome".into(),
-                        Value::String("internal snapshot selected".into()),
-                    );
-                    self.t.push(Timing {
-                        name: "github_selection".into(),
-                        elapsed_ms: 0.0,
-                        extra,
-                    });
-                    return Ok(vec![q]);
-                }
+            let internal_org = self
+                .a
+                .extra
+                .get("organization")
+                .and_then(Value::as_str)
+                .and_then(|org| {
+                    internal
+                        .as_ref()
+                        .and_then(|response| Self::parse_internal_org(&response.body, org))
+                });
+            if self
+                .a
+                .extra
+                .get("organization")
+                .and_then(Value::as_str)
+                .is_some()
+                && internal_org.is_some()
+            {
+                let mut extra = std::collections::BTreeMap::new();
+                extra.insert(
+                    "outcome".into(),
+                    Value::String("internal snapshot available".into()),
+                );
+                self.t.push(Timing {
+                    name: "github_selection".into(),
+                    elapsed_ms: 0.0,
+                    extra,
+                });
             }
             let (personal_usage, _) = Self::billing(c, x, token, owner, false, &mut self.t)?;
             if let Some((body, source, filtered)) = personal_usage {
@@ -539,7 +707,7 @@ impl Provider for GitHubCopilotProvider {
                 extra(&mut q, "billing_filtered", filtered);
                 extra(&mut q, "billing_model", "ai_credits");
                 out.push(q);
-            } else if !self.a.extra.contains_key("organization") {
+            } else {
                 let mut q = quota("GitHub Copilot Personal", "Personal", "GitHub Copilot");
                 q.remaining_pct = Some(100.);
                 q.used_pct = Some(0.);
@@ -547,67 +715,72 @@ impl Provider for GitHubCopilotProvider {
                 out.push(q);
             }
             if let Some(org) = self.a.extra.get("organization").and_then(Value::as_str) {
-                let mut trace_extra = std::collections::BTreeMap::new();
-                trace_extra.insert(
-                    "outcome".into(),
-                    Value::String("internal unavailable; billing fallback".into()),
-                );
-                self.t.push(Timing {
-                    name: "github_selection".into(),
-                    elapsed_ms: 0.0,
-                    extra: trace_extra,
-                });
-                let (usage, billing_error) = Self::billing(c, x, token, org, true, &mut self.t)?;
-                if let Some((body, source, filtered)) = usage {
-                    let bill = Self::request(
-                        c,
-                        x,
-                        format!("https://api.github.com/orgs/{org}/copilot/billing"),
-                        token,
-                    )
-                    .ok()
-                    .filter(|response| response.status == 200);
-                    let seats = bill
-                        .as_ref()
-                        .and_then(|response| response.body.pointer("/seat_breakdown/total"))
-                        .and_then(Value::as_i64);
-                    let plan = bill
-                        .as_ref()
-                        .and_then(|response| {
-                            response
-                                .body
-                                .get("plan_type")
-                                .or_else(|| response.body.get("plan"))
-                        })
-                        .and_then(Value::as_str);
-                    let allowance = Self::org_allowance(seats, plan);
-                    let mut q = Self::parse_billing(&body, allowance).unwrap_or_else(|| {
-                        let mut q = quota("", "", "GitHub Copilot");
-                        q.used = Some(0.);
-                        q
-                    });
-                    q.name = format!("GitHub Copilot Org ({org})");
-                    q.display_name = org.into();
-                    q.reset_time = Some(Self::reset());
-                    extra(&mut q, "billing_source", source);
-                    extra(&mut q, "billing_filtered", filtered);
-                    extra(&mut q, "billing_model", "ai_credits");
+                if let Some(q) = internal_org {
                     out.push(q);
                 } else {
-                    let mut q = quota(
-                        &format!("GitHub Copilot Org ({org})"),
-                        org,
-                        "GitHub Copilot",
+                    let mut trace_extra = std::collections::BTreeMap::new();
+                    trace_extra.insert(
+                        "outcome".into(),
+                        Value::String("internal unavailable; billing fallback".into()),
                     );
-                    extra(&mut q, "is_error", true);
-                    extra(
-                        &mut q,
-                        "message",
-                        billing_error
-                            .as_deref()
-                            .unwrap_or("Could not fetch AI credits billing usage for this org"),
-                    );
-                    out.push(q);
+                    self.t.push(Timing {
+                        name: "github_selection".into(),
+                        elapsed_ms: 0.0,
+                        extra: trace_extra,
+                    });
+                    let (usage, billing_error) =
+                        Self::billing(c, x, token, org, true, &mut self.t)?;
+                    if let Some((body, source, filtered)) = usage {
+                        let bill = Self::request(
+                            c,
+                            x,
+                            format!("https://api.github.com/orgs/{org}/copilot/billing"),
+                            token,
+                        )
+                        .ok()
+                        .filter(|response| response.status == 200);
+                        let seats = bill
+                            .as_ref()
+                            .and_then(|response| response.body.pointer("/seat_breakdown/total"))
+                            .and_then(Value::as_i64);
+                        let plan = bill
+                            .as_ref()
+                            .and_then(|response| {
+                                response
+                                    .body
+                                    .get("plan_type")
+                                    .or_else(|| response.body.get("plan"))
+                            })
+                            .and_then(Value::as_str);
+                        let allowance = Self::org_allowance(seats, plan);
+                        let mut q = Self::parse_billing(&body, allowance).unwrap_or_else(|| {
+                            let mut q = quota("", "", "GitHub Copilot");
+                            q.used = Some(0.);
+                            q
+                        });
+                        q.name = format!("GitHub Copilot Org ({org})");
+                        q.display_name = org.into();
+                        q.reset_time = Some(Self::reset());
+                        extra(&mut q, "billing_source", source);
+                        extra(&mut q, "billing_filtered", filtered);
+                        extra(&mut q, "billing_model", "ai_credits");
+                        out.push(q);
+                    } else {
+                        let mut q = quota(
+                            &format!("GitHub Copilot Org ({org})"),
+                            org,
+                            "GitHub Copilot",
+                        );
+                        extra(&mut q, "is_error", true);
+                        extra(
+                            &mut q,
+                            "message",
+                            billing_error
+                                .as_deref()
+                                .unwrap_or("Could not fetch AI credits billing usage for this org"),
+                        );
+                        out.push(q);
+                    }
                 }
             }
             Ok(out)
@@ -665,8 +838,7 @@ mod tests {
         let result = GitHubCopilotProvider::traced_request(
             &Failing,
             &RequestContext::default(),
-            "https://api.github.com/organizations/private-org/settings/billing/usage?token=secret"
-                .into(),
+            "https://api.github.com/orgs/private-org/settings/billing/usage?token=secret".into(),
             "secret-token",
             &mut traces,
         );
@@ -675,7 +847,7 @@ mod tests {
         assert!(traces[0].elapsed_ms >= 1.0);
         assert_eq!(
             traces[0].extra["path"],
-            "/organizations/<redacted>/settings/billing/usage"
+            "/orgs/<redacted>/settings/billing/usage"
         );
         assert_eq!(traces[0].extra["outcome"], "transport_error");
         let serialized = serde_json::to_string(&traces[0].extra).unwrap();
@@ -691,9 +863,14 @@ mod tests {
         GitHubCopilotProvider::billing(&http, &ctx, "secret", "octo", false, &mut vec![]).unwrap();
         let requests = http.0.lock().unwrap();
         let (year, month) = GitHubCopilotProvider::month();
+        let (end_year, end_month) = if month == 12 {
+            (year + 1, 1)
+        } else {
+            (year, month + 1)
+        };
         assert_eq!(requests.len(), 4);
-        assert_eq!(requests[0].url, format!("https://api.github.com/users/octo/settings/billing/usage/summary?year={year}&month={month}&product=copilot&sku=copilot_ai_credits"));
-        assert_eq!(requests[1].url, format!("https://api.github.com/users/octo/settings/billing/usage/summary?year={year}&month={month}"));
+        assert_eq!(requests[0].url, format!("https://api.github.com/users/octo/settings/billing/usage?year={year}&month={month}&start_date={year:04}-{month:02}-01&end_date={end_year:04}-{end_month:02}-01&product=copilot&sku=copilot_ai_credits"));
+        assert_eq!(requests[1].url, format!("https://api.github.com/users/octo/settings/billing/usage?year={year}&month={month}&start_date={year:04}-{month:02}-01&end_date={end_year:04}-{end_month:02}-01"));
         assert_eq!(requests[0].headers["Accept"], "application/vnd.github+json");
         assert_eq!(requests[0].headers["X-GitHub-Api-Version"], "2026-03-10");
         assert_eq!(requests[0].headers["Authorization"], "Bearer secret");

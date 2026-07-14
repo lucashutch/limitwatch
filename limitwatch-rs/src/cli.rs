@@ -6,19 +6,21 @@ use crate::{
     export::{ExportFilter, Exporter},
     history::HistoryManager,
     model::{Account, Quota, Timing},
+    providers,
     providers::base::{HttpClient, ProcessRunner, RequestContext},
     quota_client::QuotaClient,
 };
 use anyhow::{bail, Result};
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 use std::{
     collections::BTreeMap,
     io::{self, IsTerminal, Write},
     path::PathBuf,
-    process::Command,
-    sync::mpsc,
+    process::{Command, Stdio},
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -26,11 +28,18 @@ use std::{
 #[derive(Parser)]
 #[command(
     name = "limitwatch",
-    version,
+    version = env!("CARGO_PKG_VERSION"),
+    disable_version_flag = true,
     about = "Monitor API quota usage and reset times across all accounts",
     args_conflicts_with_subcommands = true
 )]
 pub struct Cli {
+    #[arg(
+        short = 'v',
+        long = "version",
+        action = ArgAction::SetTrue
+    )]
+    version: bool,
     #[command(flatten)]
     show: ShowArgs,
     #[command(subcommand)]
@@ -53,15 +62,15 @@ enum Commands {
 }
 #[derive(Args, Clone, Default)]
 pub struct ShowArgs {
-    #[arg(short, long)]
+    #[arg(short, long, help = "Email of the account to check; may be repeated")]
     account: Vec<String>,
-    #[arg(long)]
+    #[arg(long, help = "Set or clear an alias for one account")]
     alias: Option<String>,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Filter by group, or set a group with --account")]
     group: Option<String>,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Filter by provider; may be repeated")]
     provider: Vec<String>,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Filter quotas by name; may be repeated")]
     query: Vec<String>,
     #[arg(short, long)]
     refresh: bool,
@@ -79,10 +88,7 @@ pub struct ShowArgs {
     logout: bool,
     #[arg(long)]
     logout_all: bool,
-    /// List supported accounts without fetching quotas
-    #[arg(long)]
-    list_accounts: bool,
-    /// Make the identified supported account active
+    /// Make the identified supported account active (Rust extension)
     #[arg(long)]
     select_account: Option<String>,
     #[arg(long)]
@@ -114,16 +120,18 @@ struct HistoryArgs {
     table: bool,
     #[arg(long)]
     summary: bool,
-    #[arg(long, value_enum)]
-    view: Option<View>,
-}
-#[derive(Clone, Debug, ValueEnum)]
-enum View {
-    Heatmap,
-    Chart,
-    Calendar,
-    Bars,
-    Stats,
+    #[arg(long)]
+    heatmap: bool,
+    #[arg(long)]
+    chart: bool,
+    #[arg(long)]
+    calendar: bool,
+    #[arg(long)]
+    bars: bool,
+    #[arg(long)]
+    stats: bool,
+    #[arg(long)]
+    verbose: bool,
 }
 #[derive(Args)]
 struct ExportArgs {
@@ -143,6 +151,8 @@ struct ExportArgs {
     provider: Option<String>,
     #[arg(short = 'q', long)]
     quota: Option<String>,
+    #[arg(long)]
+    verbose: bool,
 }
 #[derive(Clone, ValueEnum)]
 enum Format {
@@ -155,14 +165,31 @@ impl ProcessRunner for Proc {
         &self,
         p: &str,
         args: &[&str],
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<crate::providers::base::ProcessOutput> {
-        let o = Command::new(p).args(args).output()?;
-        Ok(crate::providers::base::ProcessOutput {
-            success: o.status.success(),
-            stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
-        })
+        let mut child = Command::new(p)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let started = Instant::now();
+        loop {
+            if child.try_wait()?.is_some() {
+                let o = child.wait_with_output()?;
+                return Ok(crate::providers::base::ProcessOutput {
+                    success: o.status.success(),
+                    stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+                    stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+                });
+            }
+            if started.elapsed() >= timeout {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!("process timed out");
+            }
+            thread::sleep(Duration::from_millis(5).min(timeout.saturating_sub(started.elapsed())));
+        }
     }
 }
 #[derive(Serialize)]
@@ -170,7 +197,7 @@ struct JsonResult {
     email: String,
     alias: String,
     group: String,
-    quotas: Vec<Quota>,
+    quotas: Option<Vec<Quota>>,
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timings: Option<Vec<Timing>>,
@@ -185,6 +212,10 @@ struct Fetch {
 }
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
+    if cli.version {
+        println!("limitwatch {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     match cli.command {
         None => show(cli.show),
         Some(Commands::Show(x)) => show(x),
@@ -207,31 +238,6 @@ fn show(a: ShowArgs) -> Result<()> {
     if a.login {
         return login(&mut auth, &a);
     }
-    if a.logout_all {
-        auth.logout_all()?;
-        return status(&a, "success", "Successfully logged out from all accounts.");
-    }
-    if a.list_accounts {
-        let rows = auth
-            .supported_accounts()
-            .map(|(i, x)| {
-                json!({
-                    "email": x.email, "alias": x.alias, "group": x.group,
-                    "provider": x.provider_type, "active": i == auth.active_index
-                })
-            })
-            .collect::<Vec<_>>();
-        if a.json_output {
-            println!("{}", serde_json::to_string_pretty(&rows)?);
-        } else if rows.is_empty() {
-            println!("No supported accounts found.");
-        } else {
-            for row in rows {
-                println!("{}", row);
-            }
-        }
-        return Ok(());
-    }
     if let Some(id) = &a.select_account {
         let matches = auth
             .supported_accounts()
@@ -247,10 +253,43 @@ fn show(a: ShowArgs) -> Result<()> {
     }
     if a.logout {
         if let Some(id) = a.account.first() {
+            if a.json_output || !io::stdin().is_terminal() {
+                return status(
+                    &a,
+                    "error",
+                    "--logout requires interactive confirmation in non-interactive mode",
+                );
+            }
+            let matches = auth
+                .supported_accounts()
+                .filter(|(_, account)| {
+                    account.email == *id
+                        || account.identity() == id
+                        || account.alias.as_deref() == Some(id)
+                })
+                .map(|(_, account)| account.clone())
+                .collect::<Vec<_>>();
+            if matches.len() != 1 {
+                return status(&a, "error", "Account not found or ambiguous");
+            }
+            let label = matches[0]
+                .alias
+                .as_deref()
+                .unwrap_or(&matches[0].email)
+                .to_owned();
+            if !matches!(
+                prompt(&format!("Log out {label}? [y/N]: "))?
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "y" | "yes"
+            ) {
+                println!("Logout cancelled.");
+                return Ok(());
+            }
             if !auth.logout(id)? {
                 return status(&a, "error", "Account not found or ambiguous");
             }
-            return status(&a, "success", &format!("Successfully logged out {id}"));
+            return status(&a, "success", &format!("Successfully logged out {label}"));
         }
         if a.json_output || !io::stdin().is_terminal() {
             return status(
@@ -260,6 +299,17 @@ fn show(a: ShowArgs) -> Result<()> {
             );
         }
         return interactive_logout(&mut auth);
+    }
+    if a.logout_all {
+        return logout_all(&mut auth, &a);
+    }
+    for provider in &a.provider {
+        if !providers::available()
+            .iter()
+            .any(|(name, _)| name == provider)
+        {
+            return status(&a, "error", &format!("unsupported provider: {provider}"));
+        }
     }
     if !auth.auth_path.exists() {
         return status(&a, "error", "Accounts file not found");
@@ -273,14 +323,20 @@ fn show(a: ShowArgs) -> Result<()> {
         if a.account.len() != 1 {
             return status(&a, "error", "Metadata update requires a single account");
         }
-        let target = auth
+        let matches = auth
             .accounts
             .iter()
-            .find(|x| x.email == a.account[0] || x.alias.as_deref() == Some(&a.account[0]))
-            .map(|x| x.email.clone());
-        let Some(email) = target else {
-            return status(&a, "error", "Account not found");
-        };
+            .filter(|x| {
+                x.is_supported()
+                    && (x.email == a.account[0]
+                        || x.identity() == a.account[0]
+                        || x.alias.as_deref() == Some(&a.account[0]))
+            })
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return status(&a, "error", "Account not found or ambiguous");
+        }
+        let email = matches[0].email.clone();
         let mut m = BTreeMap::new();
         if a.alias.is_some() {
             m.insert("alias".into(), a.alias.clone());
@@ -292,7 +348,9 @@ fn show(a: ShowArgs) -> Result<()> {
             m.insert("projectId".into(), Some(p.clone()));
             m.insert("managedProjectId".into(), Some(p.clone()));
         }
-        auth.update_account_metadata(&email, &m)?;
+        if !auth.update_account_metadata(&email, &m)? {
+            return status(&a, "error", "Account not found or ambiguous");
+        }
         return status(&a, "success", &format!("Updated metadata for {email}"));
     }
     let selected = auth
@@ -310,52 +368,75 @@ fn show(a: ShowArgs) -> Result<()> {
     if selected.is_empty() {
         return status(&a, "error", "No accounts matching filters");
     }
-    let deadline = Instant::now() + Duration::from_millis(a.max_age_ms);
+    let show_start = Instant::now();
+    let deadline = show_start + Duration::from_millis(a.max_age_ms);
+    let force_refresh = a.refresh;
     let http = crate::quota_client::SharedHttp::new()?;
     let (tx, rx) = mpsc::channel();
-    for (index, account) in selected.clone() {
+    // Provider calls are bounded independently of the number of accounts.
+    // Each request still receives the same absolute deadline below.
+    let jobs = Arc::new(Mutex::new(VecDeque::from(selected.clone())));
+    for _ in 0..selected.len().min(10) {
         let tx = tx.clone();
         let http = http.clone();
+        let jobs = Arc::clone(&jobs);
         thread::spawn(move || {
-            let mut client = match QuotaClient::new(account.clone()) {
-                Ok(x) => x,
-                Err(e) => {
-                    let _ = tx.send(Fetch {
-                        index,
-                        account,
-                        quotas: vec![],
-                        error: Some(e.to_string()),
-                        timings: vec![],
-                        client: None,
-                    });
-                    return;
+            loop {
+                let Some((index, mut account)) =
+                    jobs.lock().expect("fetch job lock poisoned").pop_front()
+                else {
+                    break;
+                };
+                if force_refresh {
+                    account
+                        .extra
+                        .insert("_limitwatch_force_refresh".into(), Value::Bool(true));
                 }
-            };
-            let start = Instant::now();
-            let ctx = RequestContext {
-                deadline: Some(deadline),
-                ..Default::default()
-            };
-            let result = futures::executor::block_on(client.fetch(&http, &Proc, &ctx));
-            let mut timings = vec![Timing {
-                name: "account_total".into(),
-                elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
-                extra: BTreeMap::new(),
-            }];
-            timings.extend(client.provider().timings());
-            timings.extend(http.timings());
-            let (q, e) = match result {
-                Ok(q) => (q, None),
-                Err(e) => (vec![], Some(e.to_string())),
-            };
-            let _ = tx.send(Fetch {
-                index,
-                account,
-                quotas: q,
-                error: e,
-                timings,
-                client: Some(client),
-            });
+                let original = account.clone();
+                let mut client = match QuotaClient::new(account) {
+                    Ok(x) => x,
+                    Err(e) => {
+                        let _ = tx.send(Fetch {
+                            index,
+                            account: original,
+                            quotas: vec![],
+                            error: Some(e.to_string()),
+                            timings: vec![],
+                            client: None,
+                        });
+                        continue;
+                    }
+                };
+                let start = Instant::now();
+                let account_http = http.clone();
+                let ctx = RequestContext {
+                    deadline: Some(deadline),
+                    ..Default::default()
+                };
+                let result = futures::executor::block_on(client.fetch(&account_http, &Proc, &ctx));
+                let mut timings = vec![Timing {
+                    name: "account_total".into(),
+                    elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+                    extra: BTreeMap::new(),
+                }];
+                timings.extend(client.provider().timings());
+                timings.extend(account_http.timings());
+                let (q, e) = match result {
+                    Ok(q) => (q, None),
+                    Err(e) => (vec![], Some(e.to_string())),
+                };
+                // Providers may rotate credentials while fetching.  Return
+                // their account state so it can be persisted by the caller.
+                let account = client.account().clone();
+                let _ = tx.send(Fetch {
+                    index,
+                    account,
+                    quotas: q,
+                    error: e,
+                    timings,
+                    client: Some(client),
+                });
+            }
         });
     }
     drop(tx);
@@ -363,22 +444,47 @@ fn show(a: ShowArgs) -> Result<()> {
     while fetched.len() < selected.len() {
         let left = deadline.saturating_duration_since(Instant::now());
         match rx.recv_timeout(left) {
-            Ok(x) => fetched.push(x),
+            Ok(x) => fetched.push(finalize_fetch(
+                x,
+                a.cache_ttl.unwrap_or(config.cache_ttl()),
+                a.max_age_ms,
+                show_start,
+            )),
             Err(_) => break,
         }
     }
     for (index, account) in selected {
         if !fetched.iter().any(|x| x.index == index) {
+            let elapsed_ms = show_start.elapsed().as_secs_f64() * 1000.0;
+            let (quotas, error, timing_name, timing_reason) =
+                match cached(&account, a.cache_ttl.unwrap_or(config.cache_ttl())) {
+                    Some(quotas) => (quotas, None, "cache_fallback", "timeout_cache"),
+                    None => (
+                        vec![],
+                        Some("Timed out (no cached data available)".into()),
+                        "deadline_missed",
+                        "timeout_no_cache",
+                    ),
+                };
             fetched.push(Fetch {
                 index,
                 account: account.clone(),
-                quotas: if a.refresh {
-                    vec![]
-                } else {
-                    cached(&account, a.cache_ttl.unwrap_or(config.cache_ttl()))
-                },
-                error: Some("Timed out (no cached data available)".into()),
-                timings: vec![],
+                quotas,
+                error,
+                timings: vec![
+                    Timing {
+                        name: timing_name.into(),
+                        elapsed_ms: 0.0,
+                        extra: [("reason".into(), Value::String(timing_reason.into()))]
+                            .into_iter()
+                            .collect(),
+                    },
+                    Timing {
+                        name: "account_total".into(),
+                        elapsed_ms,
+                        extra: BTreeMap::new(),
+                    },
+                ],
                 client: QuotaClient::new(account).ok(),
             });
         }
@@ -402,9 +508,16 @@ fn show(a: ShowArgs) -> Result<()> {
     for f in &mut fetched {
         if let Some(client) = &f.client {
             auth.accounts[f.index] = client.account().clone();
+            auth.accounts[f.index]
+                .extra
+                .remove("_limitwatch_force_refresh");
             cache_changed = true;
         }
-        if f.error.is_none() && !f.quotas.is_empty() {
+        let used_cache = f
+            .timings
+            .iter()
+            .any(|timing| timing.name == "cache_fallback");
+        if f.error.is_none() && !used_cache && should_cache(&f.quotas) {
             auth.accounts[f.index]
                 .extra
                 .insert("cachedQuotas".into(), serde_json::to_value(&f.quotas)?);
@@ -429,39 +542,80 @@ fn show(a: ShowArgs) -> Result<()> {
     let mut matched = false;
     if a.json_output {
         let mut out = Vec::new();
-        for mut f in fetched {
-            if let Some(c) = &f.client {
-                f.quotas = c.filter(f.quotas, a.show_all)
-            }
-            f.quotas = display::query_filter(f.quotas, &a.query);
-            matched |= !f.quotas.is_empty();
+        for f in fetched {
+            let quotas = if f.error.is_some() {
+                None
+            } else {
+                let mut quotas = f.quotas;
+                if let Some(c) = &f.client {
+                    quotas = c.filter(quotas, a.show_all)
+                }
+                quotas = display::query_filter(quotas, &a.query);
+                matched |= !quotas.is_empty();
+                Some(quotas)
+            };
             out.push(JsonResult {
                 email: f.account.email,
                 alias: f.account.alias.unwrap_or_default(),
                 group: f.account.group.unwrap_or_default(),
-                quotas: f.quotas,
+                quotas,
                 error: f.error,
                 timings: a.timings.then_some(f.timings),
             });
         }
         println!("{}", serde_json::to_string_pretty(&out)?)
     } else {
+        let color = display::color_enabled(
+            io::stdout().is_terminal(),
+            std::env::var_os("NO_COLOR").is_some(),
+        );
         if a.query.is_empty() && !a.compact {
-            println!("\nQuota Status")
+            print!("{}", display::main_header(color));
         }
         for mut f in fetched {
-            if let Some(e) = f.error {
-                println!(
-                    "{}: Warning: {e}",
-                    f.account.alias.as_deref().unwrap_or(&f.account.email)
+            if let Some(e) = f.error.as_deref() {
+                // An account-level error excluded by --query is silent, as in
+                // Python; it must not make an unrelated query visibly fail.
+                if !a.query.is_empty() {
+                    continue;
+                }
+                print!(
+                    "{}",
+                    display::render_fetch_error(
+                        &f.account.email,
+                        f.account.alias.as_deref(),
+                        f.account.group.as_deref(),
+                        f.client.as_ref().map(|x| x.provider()),
+                        e,
+                        a.compact,
+                        color,
+                    )
                 );
                 continue;
             }
             let Some(c) = f.client else { continue };
+            let original_quotas = f.quotas.clone();
             f.quotas = c.filter(f.quotas, a.show_all);
             f.quotas = display::query_filter(f.quotas, &a.query);
             matched |= !f.quotas.is_empty();
-            if !f.quotas.is_empty() {
+            if f.quotas.is_empty() && !a.query.is_empty() {
+                continue;
+            }
+            if f.quotas.is_empty() {
+                print!(
+                    "{}",
+                    display::render_quotas(
+                        &f.account.email,
+                        f.account.alias.as_deref(),
+                        f.account.group.as_deref(),
+                        c.provider(),
+                        vec![],
+                        a.compact,
+                        color,
+                    )
+                );
+                println!("{}", display::empty_message(&original_quotas, a.show_all));
+            } else {
                 print!(
                     "{}",
                     display::render_quotas(
@@ -471,23 +625,12 @@ fn show(a: ShowArgs) -> Result<()> {
                         c.provider(),
                         f.quotas,
                         a.compact,
-                        display::color_enabled(
-                            io::stdout().is_terminal(),
-                            std::env::var_os("NO_COLOR").is_some()
-                        )
+                        color,
                     )
                 );
-                if !a.compact {
-                    let separator = "━".repeat(50);
-                    if display::color_enabled(
-                        io::stdout().is_terminal(),
-                        std::env::var_os("NO_COLOR").is_some(),
-                    ) {
-                        println!("\x1b[2m{separator}\x1b[0m")
-                    } else {
-                        println!("{separator}")
-                    }
-                }
+            }
+            if !a.compact {
+                print!("{}", display::separator(color));
             }
         }
     }
@@ -531,7 +674,7 @@ fn interactive_logout(auth: &mut AuthManager) -> Result<()> {
         return Ok(());
     }
     let mut providers = Vec::new();
-    for provider in ["github_copilot", "openai", "chutes", "openrouter"] {
+    for provider in ["github_copilot", "openai", "openrouter"] {
         if accounts.iter().any(|a| a.provider_type == provider) {
             providers.push(provider);
         }
@@ -545,7 +688,6 @@ fn interactive_logout(auth: &mut AuthManager) -> Result<()> {
         let label = match *provider {
             "github_copilot" => "GitHub Copilot",
             "openai" => "OpenAI",
-            "chutes" => "Chutes",
             "openrouter" => "OpenRouter",
             _ => provider,
         };
@@ -608,20 +750,94 @@ fn choice_index(value: &str, len: usize) -> Option<usize> {
     };
     (choice > 0 && choice <= len).then_some(choice - 1)
 }
-fn cached(a: &Account, ttl: u64) -> Vec<Quota> {
+
+fn logout_all(auth: &mut AuthManager, a: &ShowArgs) -> Result<()> {
+    let count = auth.supported_accounts().count();
+    if !a.json_output {
+        if count == 0 {
+            println!("No accounts to log out from.");
+            return Ok(());
+        }
+        let answer = prompt(&format!(
+            "Log out from all {count} account{}? [y/N]: ",
+            if count == 1 { "" } else { "s" }
+        ))?;
+        if !matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes") {
+            println!("Logout cancelled.");
+            return Ok(());
+        }
+    }
+    auth.logout_all()?;
+    if a.json_output {
+        println!("{}", json!({"status": "success"}));
+    } else {
+        println!("Successfully logged out from all accounts.");
+    }
+    Ok(())
+}
+fn cached(a: &Account, ttl: u64) -> Option<Vec<Quota>> {
     let at = a
         .extra
         .get("cachedAt")
-        .and_then(Value::as_f64)
+        .and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        })
         .unwrap_or(0.0);
     if ttl == 0 || now() - at > ttl as f64 {
-        return vec![];
+        return None;
     }
     a.extra
         .get("cachedQuotas")
         .cloned()
         .and_then(|x| serde_json::from_value(x).ok())
-        .unwrap_or_default()
+}
+
+fn should_cache(quotas: &[Quota]) -> bool {
+    !quotas.is_empty()
+        && quotas
+            .iter()
+            .any(|quota| quota.extra.get("is_error").and_then(Value::as_bool) != Some(true))
+}
+
+fn finalize_fetch(mut fetch: Fetch, ttl: u64, max_age_ms: u64, show_start: Instant) -> Fetch {
+    if show_start.elapsed().as_secs_f64() * 1000.0 <= max_age_ms as f64 {
+        return fetch;
+    }
+    let had_error = fetch.error.is_some();
+    if let Some(quotas) = cached(&fetch.account, ttl) {
+        fetch.quotas = quotas;
+        fetch.error = None;
+        fetch.timings.push(Timing {
+            name: "cache_fallback".into(),
+            elapsed_ms: 0.0,
+            extra: [(
+                "reason".into(),
+                Value::String(
+                    if had_error {
+                        "error_cache"
+                    } else {
+                        "timeout_cache"
+                    }
+                    .into(),
+                ),
+            )]
+            .into_iter()
+            .collect(),
+        });
+    } else if fetch.error.is_none() {
+        fetch.quotas.clear();
+        fetch.error = Some("Timed out (no cached data available)".into());
+        fetch.timings.push(Timing {
+            name: "deadline_missed".into(),
+            elapsed_ms: 0.0,
+            extra: [("reason".into(), Value::String("timeout_no_cache".into()))]
+                .into_iter()
+                .collect(),
+        });
+    }
+    fetch
 }
 fn now() -> f64 {
     SystemTime::now()
@@ -637,49 +853,84 @@ fn status(a: &ShowArgs, status: &str, message: &str) -> Result<()> {
     }
     Ok(())
 }
+fn action_error(a: &ShowArgs, message: impl std::fmt::Display) -> Result<()> {
+    if a.json_output {
+        println!(
+            "{}",
+            json!({"status": "error", "message": message.to_string()})
+        );
+    } else {
+        println!("Login failed: {message}");
+    }
+    Ok(())
+}
 fn login(auth: &mut AuthManager, a: &ShowArgs) -> Result<()> {
     let p = if let Some(p) = a.provider.first() {
         p.as_str()
     } else if io::stdin().is_terminal() && io::stdout().is_terminal() && !a.json_output {
-        eprint!(
-            "Select provider [1] GitHub Copilot [2] OpenAI [3] Chutes [4] OpenRouter (default 1): "
-        );
+        eprint!("Select provider [1] GitHub Copilot [2] OpenAI [3] OpenRouter (default 1): ");
         io::stderr().flush()?;
         let mut value = String::new();
         io::stdin().read_line(&mut value)?;
         match value.trim() {
             "2" | "openai" => "openai",
-            "3" | "chutes" => "chutes",
-            "4" | "openrouter" => "openrouter",
+            "3" | "openrouter" => "openrouter",
             _ => "github_copilot",
         }
     } else {
         "github_copilot"
     };
-    let mut client = QuotaClient::new(Account {
+    if !crate::providers::available()
+        .iter()
+        .any(|(name, _)| *name == p)
+    {
+        return status(a, "error", &format!("unsupported provider: {p}"));
+    }
+    let mut client = match QuotaClient::new(Account {
         provider_type: p.into(),
         email: "pending".into(),
         ..Default::default()
-    })?;
+    }) {
+        Ok(client) => client,
+        Err(error) => return action_error(a, error),
+    };
     let mut input = std::env::var("LIMITWATCH_LOGIN_JSON")
         .ok()
         .and_then(|x| serde_json::from_str(&x).ok())
         .unwrap_or(Value::Null);
     if p == "github_copilot" && input.is_null() {
-        input = github_login_input(
-            &crate::quota_client::SharedHttp::new()?,
-            &Proc,
-            &RequestContext::default(),
-        )?;
+        let http = match crate::quota_client::SharedHttp::new() {
+            Ok(http) => http,
+            Err(error) => return action_error(a, error),
+        };
+        input = match github_login_input(&http, &Proc, &RequestContext::default()) {
+            Ok(input) => input,
+            Err(error) => return action_error(a, error),
+        };
     }
-    let account = futures::executor::block_on(client.login(
+    let http = match crate::quota_client::SharedHttp::new() {
+        Ok(http) => http,
+        Err(error) => return action_error(a, error),
+    };
+    let account = match futures::executor::block_on(client.login(
         input,
-        &crate::quota_client::SharedHttp::new()?,
+        &http,
         &Proc,
         &RequestContext::default(),
-    ))?;
-    let email = auth.login(account)?;
-    status(a, "success", &format!("Successfully logged in as {email}"))
+    )) {
+        Ok(account) => account,
+        Err(error) => return action_error(a, error),
+    };
+    let email = match auth.login(account) {
+        Ok(email) => email,
+        Err(error) => return action_error(a, error),
+    };
+    if a.json_output {
+        println!("{}", json!({"status": "success", "email": email}));
+    } else {
+        println!("Successfully logged in as {email}");
+    }
+    Ok(())
 }
 fn prompt(message: &str) -> Result<String> {
     eprint!("{message}");
@@ -759,14 +1010,49 @@ fn history(a: HistoryArgs) -> Result<()> {
     let c = Config::new(None);
     let h = HistoryManager::new(Some(c.history_db_path()))?;
     if a.summary {
-        return print_ok(display::history_summary(&h.get_database_info()?));
-    }
-    if let Some(v) = a.view {
-        let name = format!("{v:?}").to_lowercase();
-        return print_ok(display::weekly(
-            &name,
-            &h.get_weekly_activity(a.account.as_deref(), a.provider.as_deref())?,
+        return print_ok(crate::history::render_history_summary(
+            &h.get_database_info()?,
         ));
+    }
+    let view = if a.heatmap {
+        Some("heatmap")
+    } else if a.chart {
+        Some("chart")
+    } else if a.calendar {
+        Some("calendar")
+    } else if a.bars {
+        Some("bars")
+    } else if a.stats {
+        Some("stats")
+    } else {
+        None
+    };
+    if let Some(view) = view {
+        let weekly = h.get_weekly_activity(a.account.as_deref(), a.provider.as_deref())?;
+        if view == "stats" {
+            let preset = a.preset.as_deref().or(Some("7d"));
+            let history = h.get_history(
+                preset,
+                a.since.as_deref(),
+                a.until.as_deref(),
+                a.account.as_deref(),
+                a.provider.as_deref(),
+                a.quota.as_deref(),
+            )?;
+            let aggregation = h.get_aggregation(
+                preset,
+                a.since.as_deref(),
+                a.until.as_deref(),
+                a.account.as_deref(),
+                a.provider.as_deref(),
+            )?;
+            return print_ok(crate::history::render_stats(
+                &history,
+                &weekly,
+                &aggregation,
+            ));
+        }
+        return print_ok(crate::history::render_weekly(view, &weekly));
     }
     let preset = a
         .preset

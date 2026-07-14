@@ -110,13 +110,67 @@ pub fn require_success(response: HttpResponse, operation: &str) -> Result<HttpRe
     }
 }
 
+/// Keep provider diagnostics useful without echoing request credentials or URLs.
+/// Provider errors are user-facing and may include text returned by an HTTP
+/// client or a local helper, so they must not be copied verbatim.
+pub fn sanitize_diagnostic(value: &str) -> String {
+    let mut words = value.split_whitespace().peekable();
+    let mut sanitized = Vec::new();
+    while let Some(word) = words.next() {
+        let lower = word.to_ascii_lowercase();
+        if lower == "bearer" || lower == "token" || lower == "password" {
+            sanitized.push(word.to_owned());
+            if words.peek().is_some() {
+                words.next();
+                sanitized.push("<redacted>".into());
+            }
+        } else if lower.starts_with("http://")
+            || lower.starts_with("https://")
+            || lower.contains("://")
+        {
+            sanitized.push("<redacted-url>".into())
+        } else if lower.contains("secret") {
+            sanitized.push("<redacted>".into())
+        } else if [
+            "token=",
+            "access_token=",
+            "refresh_token=",
+            "api_key=",
+            "apikey=",
+            "key=",
+            "authorization=",
+        ]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+        {
+            sanitized.push(format!(
+                "{}<redacted>",
+                word.split('=').next().unwrap_or("value=")
+            ));
+        } else {
+            sanitized.push(word.to_owned())
+        }
+    }
+    sanitized.join(" ")
+}
+
 /// Canonical RFC3339 UTC representation for epoch seconds/milliseconds or RFC3339 input.
 pub fn normalize_reset(value: &Value) -> Option<String> {
-    let parsed: DateTime<Utc> = if let Some(mut epoch) = value.as_i64() {
-        if epoch.abs() > 10_000_000_000 {
-            epoch /= 1000;
+    let epoch = value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|s| s.trim().parse::<f64>().ok()));
+    let parsed: DateTime<Utc> = if let Some(mut epoch) = epoch {
+        if !epoch.is_finite() {
+            return None;
         }
-        Utc.timestamp_opt(epoch, 0).single()?
+        if epoch.abs() > 10_000_000_000. {
+            epoch /= 1000.;
+        }
+        let seconds = epoch.trunc() as i64;
+        let nanos = ((epoch - seconds as f64) * 1_000_000_000.)
+            .round()
+            .clamp(0., 999_999_999.) as u32;
+        Utc.timestamp_opt(seconds, nanos).single()?
     } else {
         DateTime::parse_from_rfc3339(value.as_str()?)
             .ok()?

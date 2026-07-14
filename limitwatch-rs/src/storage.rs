@@ -194,9 +194,9 @@ impl Storage {
     }
     fn distinct(&self, column: &str, account: Option<&str>) -> Result<Vec<String>> {
         let sql = format!(
-            "SELECT DISTINCT {column} FROM quota_snapshots{} ORDER BY {column}",
+            "SELECT DISTINCT {column} FROM quota_snapshots WHERE provider_type != 'google'{} ORDER BY {column}",
             if account.is_some() {
-                " WHERE account_email = ?"
+                " AND account_email = ?"
             } else {
                 ""
             }
@@ -218,7 +218,7 @@ impl Storage {
     }
     pub fn get_time_range(&self) -> Result<(Option<String>, Option<String>)> {
         Ok(self.connection()?.query_row(
-            "SELECT MIN(timestamp),MAX(timestamp) FROM quota_snapshots",
+            "SELECT MIN(timestamp),MAX(timestamp) FROM quota_snapshots WHERE provider_type != 'google'",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?)
@@ -277,7 +277,10 @@ impl Storage {
     }
 }
 fn filtered_sql(base: &str, f: &HistoryFilter, order: bool) -> (String, Vec<String>) {
-    let mut q = base.to_owned();
+    // Google snapshots remain in the shared database for compatibility, but
+    // the Rust rewrite intentionally does not expose the unsupported provider
+    // through history or export views.
+    let mut q = format!("{base} AND provider_type != 'google'");
     let mut v = vec![];
     for (column, value) in [
         ("timestamp >=", f.since.map(|x| x.to_rfc3339())),

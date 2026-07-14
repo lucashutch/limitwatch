@@ -2,6 +2,7 @@ use std::{
     fs,
     path::Path,
     process::{Command, Output, Stdio},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tempfile::TempDir;
 
@@ -57,7 +58,9 @@ fn myriota_internal_credits_render_exact_python_text_at_fixed_clock() {
 }
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_limitwatch"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_limitwatch"));
+    command.env_remove("XDG_CONFIG_HOME");
+    command
 }
 
 fn accounts(home: &Path, body: &str) {
@@ -71,6 +74,7 @@ fn terminal_logout(home: &Path, input: &str) -> Output {
     let mut child = Command::new("script")
         .args(["-qfec", &command, "/dev/null"])
         .env("HOME", home)
+        .env_remove("XDG_CONFIG_HOME")
         .env("NO_COLOR", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -182,6 +186,26 @@ fn invalid_completion_shell_fails() {
 }
 
 #[test]
+fn removed_provider_is_not_loginable_or_completable() {
+    let home = TempDir::new().unwrap();
+    let output = bin()
+        .args(["--login", "--provider", "chutes", "--json"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["status"], "error");
+    assert!(value["message"]
+        .as_str()
+        .unwrap()
+        .contains("unsupported provider"));
+    assert_eq!(
+        limitwatch::completions::candidates("provider", ""),
+        vec!["github_copilot", "openai", "openrouter"]
+    );
+}
+
+#[test]
 fn fixture_completion_provider_candidates_match() {
     let f: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/parity/reference.json")).unwrap();
@@ -238,6 +262,41 @@ fn bare_logout_can_be_cancelled_without_mutating_accounts() {
 }
 
 #[test]
+fn logout_all_requires_confirmation_but_json_is_noninteractive() {
+    let home = TempDir::new().unwrap();
+    let original = r#"{"accounts":[{"type":"github_copilot","email":"octo"}],"activeIndex":0}"#;
+    accounts(home.path(), original);
+    let cancelled = {
+        let command = format!("{} --logout-all", env!("CARGO_BIN_EXE_limitwatch"));
+        let mut child = Command::new("script")
+            .args(["-qfec", &command, "/dev/null"])
+            .env("HOME", home.path())
+            .env_remove("XDG_CONFIG_HOME")
+            .env("NO_COLOR", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        child.stdin.take().unwrap().write_all(b"n\n").unwrap();
+        child.wait_with_output().unwrap()
+    };
+    assert!(text(&cancelled).contains("Logout cancelled."));
+    assert_eq!(
+        fs::read_to_string(home.path().join(".config/limitwatch/accounts.json")).unwrap(),
+        original
+    );
+
+    let json = bin()
+        .args(["--logout-all", "--json"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(value, serde_json::json!({"status": "success"}));
+}
+
+#[test]
 fn bare_logout_reports_no_accounts_on_a_terminal() {
     let home = TempDir::new().unwrap();
     accounts(home.path(), r#"{"accounts":[],"activeIndex":0}"#);
@@ -274,4 +333,59 @@ fn bare_logout_is_explicitly_noninteractive_for_json_and_piped_input() {
         text(&piped).trim(),
         "--logout requires --account in non-interactive mode"
     );
+}
+
+#[test]
+fn refresh_keeps_fresh_string_timestamp_cache_fallback_and_json_shape() {
+    let home = TempDir::new().unwrap();
+    let cached_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let original = format!(
+        r#"{{"accounts":[{{"type":"openrouter","email":"cached@example.com","apiKey":"test-key","cachedAt":"{cached_at}","cachedQuotas":[{{"name":"cached","display_name":"Cached","remaining_pct":80.0}}]}}],"activeIndex":0}}"#
+    );
+    accounts(home.path(), &original);
+
+    let output = bin()
+        .args(["--json", "--timings", "--refresh", "--max-age-ms", "0"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value[0]["error"], serde_json::Value::Null);
+    assert_eq!(value[0]["quotas"][0]["name"], "cached");
+    assert_eq!(value[0]["timings"][0]["name"], "cache_fallback");
+    assert_eq!(value[0]["timings"][0]["reason"], "timeout_cache");
+    assert!(
+        fs::read_to_string(home.path().join(".config/limitwatch/accounts.json"))
+            .unwrap()
+            .contains(&format!(r#""cachedAt": "{cached_at}""#))
+    );
+}
+
+#[test]
+fn expired_cache_is_null_in_json_and_query_miss_exits_nonzero() {
+    let home = TempDir::new().unwrap();
+    accounts(
+        home.path(),
+        r#"{"accounts":[{"type":"openrouter","email":"cached@example.com","apiKey":"test-key","cachedAt":"1","cachedQuotas":[{"name":"cached","display_name":"Cached"}]}],"activeIndex":0}"#,
+    );
+    let output = bin()
+        .args(["--json", "--max-age-ms", "0"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(output.status.success());
+    assert_eq!(value[0]["quotas"], serde_json::Value::Null);
+    assert_eq!(value[0]["error"], "Timed out (no cached data available)");
+
+    let output = bin()
+        .args(["--json", "--max-age-ms", "0", "--query", "missing"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
 }

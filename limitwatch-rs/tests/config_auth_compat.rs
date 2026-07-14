@@ -63,10 +63,50 @@ fn login_updates_logout_and_metadata_are_compatible() {
     let mut metadata = BTreeMap::new();
     metadata.insert("alias".into(), Some("mine".into()));
     metadata.insert("group".into(), Some("work".into()));
+    metadata.insert("projectId".into(), Some("project-a".into()));
+    metadata.insert("managedProjectId".into(), Some("managed-a".into()));
     auth.update_account_metadata("a@example.com", &metadata)
         .unwrap();
-    assert!(auth.logout("mine").unwrap());
+    assert_eq!(auth.accounts[0].project_id.as_deref(), Some("project-a"));
+    assert_eq!(
+        auth.accounts[0].managed_project_id.as_deref(),
+        Some("managed-a")
+    );
+    let mut clear = BTreeMap::new();
+    clear.insert("alias".into(), Some("none".into()));
+    clear.insert("projectId".into(), Some(String::new()));
+    clear.insert("managedProjectId".into(), None);
+    assert!(auth
+        .update_account_metadata("a@example.com", &clear)
+        .unwrap());
+    assert!(auth.accounts[0].alias.is_none());
+    assert!(auth.accounts[0].project_id.is_none());
+    assert!(auth.accounts[0].managed_project_id.is_none());
+    assert!(!auth.logout("mine").unwrap());
+    assert!(auth.logout("a@example.com").unwrap());
     assert!(auth.accounts.is_empty());
+}
+
+#[test]
+fn malformed_known_fields_do_not_discard_other_accounts_or_unknown_data() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("accounts.json"),
+        r#"{"accounts":[
+          {"type":"openai","email":42,"future":{"kept":true}},
+          {"type":"openrouter","email":"valid@example.com"}
+        ],"activeIndex":1,"rootFuture":"kept"}"#,
+    )
+    .unwrap();
+    let auth = AuthManager::new(dir.path().join("accounts.json"));
+    assert_eq!(auth.accounts.len(), 2);
+    assert_eq!(auth.accounts[0].email, "");
+    assert_eq!(auth.accounts[0].extra["future"], json!({"kept": true}));
+    auth.save_accounts().unwrap();
+    let saved: Value =
+        serde_json::from_slice(&fs::read(dir.path().join("accounts.json")).unwrap()).unwrap();
+    assert_eq!(saved["rootFuture"], "kept");
+    assert_eq!(saved["accounts"][0]["future"], json!({"kept": true}));
 }
 
 #[test]

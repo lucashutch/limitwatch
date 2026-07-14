@@ -5,6 +5,7 @@ use limitwatch::{
 };
 use serde_json::{json, Value};
 use std::{
+    fs,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -38,7 +39,7 @@ fn account(kind: &str) -> Account {
 }
 #[test]
 fn every_provider_has_stable_metadata() {
-    for kind in ["chutes", "github_copilot", "openai", "openrouter"] {
+    for kind in ["github_copilot", "openai", "openrouter"] {
         let p = providers::create(account(kind)).unwrap();
         assert_eq!(p.provider_type(), kind);
         assert!(!p.provider_name().is_empty());
@@ -59,6 +60,37 @@ fn request_context_bounds_and_cancels() {
         .unwrap_err()
         .to_string()
         .contains("cancelled"));
+}
+
+#[test]
+fn checked_uses_remaining_absolute_deadline_for_each_request() {
+    let http = Http {
+        responses: Mutex::new(vec![HttpResponse {
+            status: 200,
+            body: Value::Null,
+            headers: Default::default(),
+        }]),
+        requests: Mutex::new(vec![]),
+    };
+    let ctx = RequestContext {
+        deadline: Some(Instant::now() + Duration::from_millis(20)),
+        ..Default::default()
+    };
+    checked(
+        &http,
+        &ctx,
+        HttpRequest {
+            method: "GET",
+            url: "https://example.test".into(),
+            headers: Default::default(),
+            body: None,
+            timeout: Duration::from_secs(10),
+        },
+    )
+    .unwrap();
+    let timeout = http.requests.lock().unwrap()[0].timeout;
+    assert!(timeout > Duration::ZERO);
+    assert!(timeout <= Duration::from_millis(20));
 }
 #[test]
 fn provider_errors_do_not_expose_credentials() {
@@ -91,10 +123,7 @@ fn provider_errors_do_not_expose_credentials() {
 }
 #[test]
 fn parsers_accept_representative_payloads() {
-    use limitwatch::providers::{
-        chutes::ChutesProvider, openai::OpenAiProvider, openrouter::OpenRouterProvider,
-    };
-    assert!(ChutesProvider::parse_usage(&json!({"quota":100,"used":25}), "Daily").is_some());
+    use limitwatch::providers::{openai::OpenAiProvider, openrouter::OpenRouterProvider};
     assert_eq!(OpenAiProvider::parse_usage(&json!({"rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":3600}}})).len(),1);
     assert_eq!(
         OpenRouterProvider::parse_credits(&json!({"data":{"total_credits":10,"total_usage":2}}))
@@ -121,6 +150,111 @@ fn python_reference_reset_and_failure_fixture_matches() {
         .unwrap_err();
         assert_eq!(error.to_string(), c["message"]);
     }
+}
+
+#[test]
+fn reset_normalization_accepts_numeric_strings_and_fractional_epochs() {
+    assert_eq!(
+        normalize_reset(&json!("1700000000")),
+        Some("2023-11-14T22:13:20Z".into())
+    );
+    assert_eq!(
+        normalize_reset(&json!(1700000000.5)),
+        Some("2023-11-14T22:13:20Z".into())
+    );
+}
+
+#[test]
+fn diagnostic_sanitization_redacts_credentials_and_urls() {
+    let message = sanitize_diagnostic(
+        "Bearer header-secret token=token-secret https://user:password@example.test/x",
+    );
+    assert!(!message.contains("header-secret"));
+    assert!(!message.contains("token-secret"));
+    assert!(!message.contains("password"));
+    assert!(!message.contains("example.test"));
+}
+
+#[test]
+fn openai_local_credentials_and_extended_usage_contract() {
+    use limitwatch::providers::openai::OpenAiProvider;
+
+    let path = std::env::temp_dir().join(format!(
+        "limitwatch-openai-auth-{}-{}.json",
+        std::process::id(),
+        Instant::now().elapsed().as_nanos()
+    ));
+    fs::write(
+        &path,
+        json!({
+            "access_token": "offline-access-token",
+            "refresh_token": "offline-refresh-token",
+            "email": "local@example.com"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let http = Http {
+        responses: Mutex::new(vec![
+            HttpResponse {
+                status: 200,
+                body: json!({"plan_type":"pro"}),
+                headers: Default::default(),
+            },
+            HttpResponse {
+                status: 401,
+                body: Value::Null,
+                headers: Default::default(),
+            },
+        ]),
+        requests: Mutex::new(vec![]),
+    };
+    let mut provider = OpenAiProvider::new(account("openai"));
+    let logged_in = futures::executor::block_on(provider.login(
+        json!({"authFile":path.to_string_lossy()}),
+        &http,
+        &Proc,
+        &RequestContext::default(),
+    ))
+    .unwrap();
+    fs::remove_file(path).unwrap();
+    assert_eq!(logged_in.email, "local@example.com");
+    assert_eq!(logged_in.extra["refreshToken"], "offline-refresh-token");
+
+    let quotas = OpenAiProvider::parse_usage(&json!({
+        "plan_type":"pro",
+        "additional_rate_limits":[{"name":"Cloud Tasks","used_percent":25,"limit_window_seconds":1800}],
+        "credits":{"has_credits":true,"balance":75.5,"unlimited":false}
+    }));
+    assert_eq!(quotas.len(), 2);
+    assert_eq!(quotas[0].display_name, "Cloud Tasks (30m)");
+    assert_eq!(quotas[1].extra["balance"], 75.5);
+}
+
+#[test]
+fn openrouter_key_fallback_marks_unlimited_keys_as_spend_only() {
+    let http = Http {
+        responses: Mutex::new(vec![
+            HttpResponse {
+                status: 403,
+                body: Value::Null,
+                headers: Default::default(),
+            },
+            HttpResponse {
+                status: 200,
+                body: json!({"data":{"label":"unlimited","usage":314.0 / 100.0,"limit":null}}),
+                headers: Default::default(),
+            },
+        ]),
+        requests: Mutex::new(vec![]),
+    };
+    let mut provider = providers::create(account("openrouter")).unwrap();
+    let quotas =
+        futures::executor::block_on(provider.fetch(&http, &Proc, &RequestContext::default()))
+            .unwrap();
+    assert_eq!(quotas[0].display_name, "unlimited: $3.14 spent");
+    assert_eq!(quotas[0].remaining_pct, Some(100.));
+    assert_eq!(quotas[0].limit, Some(0.));
 }
 
 #[test]
@@ -182,11 +316,16 @@ fn github_internal_user_is_first_single_call_and_selects_configured_org() {
         "fixtures/github_copilot/myriota_internal_user.json"
     ))
     .unwrap();
-    let responses = vec![HttpResponse {
+    let mut responses = vec![HttpResponse {
         status: 200,
         body: fixture,
         headers: Default::default(),
     }];
+    responses.extend((0..4).map(|_| HttpResponse {
+        status: 404,
+        body: json!({"message":"Not Found"}),
+        headers: Default::default(),
+    }));
     let http = Http {
         responses: Mutex::new(responses),
         requests: Mutex::new(vec![]),
@@ -202,6 +341,7 @@ fn github_internal_user_is_first_single_call_and_selects_configured_org() {
         futures::executor::block_on(provider.fetch(&http, &Proc, &RequestContext::default()))
             .unwrap();
     let org = quotas.iter().find(|q| q.display_name == "myriota").unwrap();
+    assert!(quotas.iter().any(|q| q.display_name == "Personal"));
     assert_eq!(org.name, "GitHub Copilot Org (myriota)");
     assert_eq!(org.limit, Some(26000.0));
     assert_eq!(org.used, Some(231.3));
@@ -221,8 +361,7 @@ fn github_internal_user_is_first_single_call_and_selects_configured_org() {
             .count(),
         1
     );
-    assert!(!requests.iter().any(|r| r.url.contains("/organizations/")));
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 5);
 }
 
 #[test]
@@ -276,7 +415,7 @@ fn github_internal_user_malformed_or_no_match_falls_back_to_billing() {
         assert_eq!(
             requests
                 .iter()
-                .filter(|r| r.url.contains("/organizations/"))
+                .filter(|r| r.url.contains("/orgs/Myriota/settings/billing/usage"))
                 .count(),
             4
         );
@@ -295,42 +434,12 @@ fn github_reloaded_account_fetches_personal_and_myriota_endpoints() {
             },
             HttpResponse {
                 status: 200,
-                body: usage.clone(),
-                headers: Default::default(),
-            },
-            HttpResponse {
-                status: 200,
-                body: usage.clone(),
-                headers: Default::default(),
-            },
-            HttpResponse {
-                status: 200,
-                body: usage.clone(),
-                headers: Default::default(),
-            },
-            HttpResponse {
-                status: 200,
-                body: usage.clone(),
-                headers: Default::default(),
-            },
-            HttpResponse {
-                status: 200,
-                body: usage.clone(),
-                headers: Default::default(),
-            },
-            HttpResponse {
-                status: 200,
-                body: usage.clone(),
-                headers: Default::default(),
-            },
-            HttpResponse {
-                status: 200,
-                body: usage.clone(),
-                headers: Default::default(),
-            },
-            HttpResponse {
-                status: 200,
                 body: usage,
+                headers: Default::default(),
+            },
+            HttpResponse {
+                status: 200,
+                body: json!({"usageItems":[{"product":"Copilot premium requests","grossQuantity":2.0}]}),
                 headers: Default::default(),
             },
             HttpResponse {
@@ -363,12 +472,12 @@ fn github_reloaded_account_fetches_personal_and_myriota_endpoints() {
     );
     assert!(requests[1]
         .url
-        .contains("/users/Lucashutch/settings/billing/usage/summary?"));
-    assert!(requests[5]
+        .contains("/users/Lucashutch/settings/billing/usage?"));
+    assert!(requests[2]
         .url
-        .contains("/organizations/Myriota/settings/billing/usage/summary?"));
+        .contains("/orgs/Myriota/settings/billing/usage?"));
     assert_eq!(
-        requests[9].url,
+        requests[3].url,
         "https://api.github.com/orgs/Myriota/copilot/billing"
     );
     for request in requests.iter() {
@@ -399,8 +508,8 @@ fn github_billing_request_sequence() {
         body: json!({"copilot_plan":"pro"}),
         headers: Default::default(),
     }];
-    responses.extend([empty(), empty(), usage(), usage()]);
-    responses.extend([empty(), empty(), usage(), usage()]);
+    responses.extend([empty(), empty(), usage()]);
+    responses.extend([empty(), empty(), usage()]);
     responses.push(HttpResponse {
         status: 200,
         body: json!({"seat_breakdown":{"total":2},"plan_type":"business"}),
@@ -446,9 +555,11 @@ fn github_billing_request_sequence() {
             &["year", "month"]
         );
         if expected == "filtered" {
-            assert_eq!(&parts[2..], &["product=copilot", "sku=copilot_ai_credits"]);
+            assert!(parts[2].starts_with("start_date="));
+            assert!(parts[3].starts_with("end_date="));
+            assert!(query.contains("product=copilot&sku=copilot_ai_credits"));
         } else {
-            assert_eq!(parts.len(), 2);
+            assert!(query.contains("start_date=") && query.contains("end_date="));
         }
         assert_eq!(request.method, "GET");
         assert_eq!(request.headers["Authorization"], "Bearer validated-token");
@@ -464,7 +575,7 @@ fn github_billing_request_sequence() {
         fixture["interstitial_paths"][0]
     );
     assert_eq!(
-        requests[9]
+        requests[7]
             .url
             .strip_prefix("https://api.github.com")
             .unwrap(),
@@ -532,7 +643,7 @@ fn github_billing_404_fallback() {
         let requests = http.requests.lock().unwrap();
         let billing = requests
             .iter()
-            .filter(|r| r.url.contains("/organizations/"))
+            .filter(|r| r.url.contains("/orgs/Myriota/settings/billing/usage"))
             .collect::<Vec<_>>();
         assert_eq!(billing.len(), 4);
         for (index, request) in billing.iter().enumerate() {
