@@ -178,7 +178,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn quota_json_is_sparse_and_uses_python_reset_name() {
+    fn quota_json_is_sparse_and_uses_public_reset_name() {
         let quota = Quota {
             name: "Primary".into(),
             display_name: "Primary".into(),
@@ -198,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn quota_cache_accepts_numeric_and_legacy_reset_values() {
+    fn quota_cache_accepts_numeric_and_older_reset_values() {
         for (value, expected) in [
             (json!(1704067200), "1704067200"),
             (json!("1704067200"), "1704067200"),

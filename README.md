@@ -10,7 +10,8 @@ across GitHub Copilot, OpenAI Codex, and OpenRouter accounts.
 - Standard, compact, and JSON quota output with reset countdowns.
 - SQLite-backed quota history, charts, summaries, and CSV or Markdown export.
 - Dynamic shell completions for bash, zsh, and fish.
-- Shared account/config/history data at `~/.config/limitwatch/`.
+- Durable account, configuration, and history data in
+  `~/.config/limitwatch/`.
 
 ## Supported providers
 
@@ -20,31 +21,32 @@ across GitHub Copilot, OpenAI Codex, and OpenRouter accounts.
 | **OpenAI Codex** | Codex plan usage windows | Local credentials or OpenAI device login |
 | **OpenRouter** | Remaining credits and key usage | API key |
 
+Google and Chutes.ai accounts are not supported. Existing records for those
+providers are left intact in account storage but are ignored by selection,
+fetching, history filters, and completions.
+
 ## Install
 
-Install from a checkout with Rust 1.85 or newer:
+[Install Rust](https://www.rust-lang.org/tools/install) 1.85 or newer, then
+install LimitWatch from GitHub:
 
 ```sh
-cargo install --path limitwatch-rs
+cargo install --git https://github.com/lucashutch/limitwatch.git --locked
 ```
 
-For development:
-
-```sh
-cd limitwatch-rs
-cargo run -- --help
-```
+The executable is installed as `limitwatch`. To install from a local checkout
+instead, run `cargo install --path . --locked` in the repository root.
 
 ## Usage
 
 ```sh
-# Add an account
+# Add an account interactively
 limitwatch --login
 
 # Show all supported accounts
 limitwatch
 
-# Filter output
+# Filter or change output format
 limitwatch --provider openrouter --compact
 limitwatch --account work --json --timings
 
@@ -53,25 +55,105 @@ limitwatch history --preset 7d --table
 limitwatch export --format markdown --output quotas.md
 ```
 
-See the [Rust CLI reference](limitwatch-rs/README.md) for all options,
-authentication details, shared-data behavior, and completions.
+Run `limitwatch --help` for the complete command reference.
 
-## Legacy Python implementation
+### Main options
 
-The former Python CLI has been archived in
-[`legacy/python`](legacy/python/README.md). It is not released or covered by
-primary CI. It remains available only for legacy Google and Chutes.ai support
-and reference; use the Rust CLI for all supported providers.
+```text
+-a, --account <ID>         Repeatable email or alias filter
+    --alias <ALIAS>        Set or clear an account alias
+-g, --group <GROUP>        Filter by group or update account metadata
+-p, --provider <TYPE>      Repeatable provider filter
+-q, --query <TEXT>         Repeatable quota text filter
+-r, --refresh              Refresh provider data
+-s, --show-all             Include normally hidden quotas
+-c, --compact              Use compact output
+-j, --json                 Use machine-readable output
+-l, --login                Add or update an account
+    --logout               Remove the selected account
+    --logout-all           Remove all accounts
+    --no-record            Do not write this fetch to history
+    --verbose              Enable diagnostic output
+    --timings              Include timings in JSON output
+    --max-age-ms <MS>      Set the overall fetch deadline (default: 4000)
+    --cache-ttl <SEC>      Override the cached-quota lifetime
+```
+
+Additional commands include:
+
+- `history` for tables, summaries, charts, calendars, bars, and statistics.
+- `export` for CSV or Markdown history exports.
+- `completion bash|zsh|fish` for shell completion scripts.
+
+## Authentication
+
+Running `limitwatch --login` prompts for a provider. You can select one
+directly with `--provider`.
+
+- **GitHub Copilot:** Uses `gh auth token` when the GitHub CLI is installed and
+  authenticated, or accepts a GitHub token. Selecting an organization during
+  login monitors that organization's credits instead of personal credits.
+- **OpenAI Codex:** Discovers local OpenCode and Codex credentials first, then
+  offers OpenAI device authorization when needed.
+- **OpenRouter:** Prompts for and validates an API key in interactive sessions.
+
+Non-interactive login can provide explicit input through
+`LIMITWATCH_LOGIN_JSON`, for example:
+
+```sh
+LIMITWATCH_LOGIN_JSON='{"apiKey":"..."}' \
+  limitwatch --login --provider openrouter
+```
+
+## Data and security
+
+LimitWatch stores `accounts.json`, `config.json`, and `history.db` in
+`~/.config/limitwatch/` by default. Unknown JSON fields are retained during
+normal updates, and file writes use atomic replacement.
+
+Account storage contains tokens and API keys in plaintext with the permissions
+inherited from the configuration directory. Do not commit, print, or share
+these files. Restrict the directory's permissions and redact diagnostics before
+sharing them. JSON quota output does not intentionally include credentials but
+may contain messages returned by providers.
+
+## Shell completions
+
+Generate a completion script using your shell's normal installation path:
+
+```sh
+limitwatch completion bash > ~/.local/share/bash-completion/completions/limitwatch
+limitwatch completion zsh > ~/.zfunc/_limitwatch
+limitwatch completion fish > ~/.config/fish/completions/limitwatch.fish
+```
 
 ## Development
 
 ```sh
-cd limitwatch-rs
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
+cargo run -- --help
 ```
+
+Integration tests use sanitized fixtures and mocked responses; they do not
+require credentials or live provider APIs. SQLite is bundled, so no system
+SQLite installation is required.
 
 ## License
 
 [MIT](LICENSE)
+
+## Upgrading from older Python releases
+
+The Python implementation has been retired. Existing users must remove the old
+tool and reinstall LimitWatch so their shell resolves the Rust executable:
+
+```sh
+uv tool uninstall limitwatch
+cargo install --git https://github.com/lucashutch/limitwatch.git --locked
+```
+
+Your data in `~/.config/limitwatch/` remains in place. Run
+`limitwatch --version` after reinstalling to confirm the new executable is
+active.

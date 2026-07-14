@@ -574,8 +574,8 @@ fn show(a: ShowArgs) -> Result<()> {
         }
         for mut f in fetched {
             if let Some(e) = f.error.as_deref() {
-                // An account-level error excluded by --query is silent, as in
-                // Python; it must not make an unrelated query visibly fail.
+                // An account-level error excluded by --query is silent; it
+                // must not make an unrelated query visibly fail.
                 if !a.query.is_empty() {
                     continue;
                 }

@@ -90,9 +90,9 @@ impl Exporter<'_> {
                 x.provider_type,
                 x.quota_name,
                 x.display_name.unwrap_or_default(),
-                x.remaining_pct.map(python_float).unwrap_or_default(),
-                x.used.map(python_float).unwrap_or_default(),
-                x.limit_val.map(python_float).unwrap_or_default(),
+                x.remaining_pct.map(csv_float).unwrap_or_default(),
+                x.used.map(csv_float).unwrap_or_default(),
+                x.limit_val.map(csv_float).unwrap_or_default(),
                 x.reset_time.unwrap_or_default(),
             ];
             out.push_str(
@@ -200,7 +200,7 @@ fn csv_field(v: &str) -> String {
     }
 }
 
-fn python_float(value: f64) -> String {
+fn csv_float(value: f64) -> String {
     if value.is_finite() && value.fract() == 0.0 {
         format!("{value:.1}")
     } else {
