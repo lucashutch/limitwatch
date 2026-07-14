@@ -772,3 +772,209 @@ impl Provider for OpenAiProvider {
         self.t.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use serde_json::json;
+    use std::sync::Mutex;
+
+    struct Http {
+        responses: Mutex<Vec<HttpResponse>>,
+        requests: Mutex<Vec<HttpRequest>>,
+    }
+
+    impl HttpClient for Http {
+        fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
+            self.requests.lock().unwrap().push(request);
+            Ok(self.responses.lock().unwrap().remove(0))
+        }
+    }
+
+    struct FailingHttp;
+
+    impl HttpClient for FailingHttp {
+        fn execute(&self, _: HttpRequest) -> Result<HttpResponse> {
+            anyhow::bail!("Bearer secret-token was rejected")
+        }
+    }
+
+    struct Process;
+
+    impl ProcessRunner for Process {
+        fn run(&self, _: &str, _: &[&str], _: Duration) -> Result<ProcessOutput> {
+            Ok(ProcessOutput::default())
+        }
+    }
+
+    fn account(token: &str, refresh: Option<&str>) -> Account {
+        let mut account = Account {
+            provider_type: "openai".into(),
+            email: "user@example.com".into(),
+            refresh_token: refresh.map(str::to_owned),
+            ..Default::default()
+        };
+        account
+            .extra
+            .insert("accessToken".into(), Value::String(token.into()));
+        account
+    }
+
+    fn response(status: u16, body: Value) -> HttpResponse {
+        HttpResponse {
+            status,
+            body,
+            headers: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn parse_usage_handles_empty_windows_credits_and_window_labels() {
+        let fallback = OpenAiProvider::parse_usage(&json!({"plan_type": "team"}));
+        assert_eq!(fallback[0].display_name, "Plan: Team");
+        assert_eq!(fallback[0].remaining_pct, Some(100.));
+
+        let quotas = OpenAiProvider::parse_usage(&json!({
+            "plan_type": "pro",
+            "rate_limit": {
+                "primary_window": {"used_percent": 125, "limit_window_seconds": 172800},
+                "secondary_window": {"used_percent": "-1", "limit_window_seconds": 5400}
+            },
+            "additional_rate_limits": [null, {"name": "Bonus", "used_percent": 20, "limit_window_seconds": 1800}],
+            "credits": {"has_credits": true, "unlimited": true, "balance": "not-a-number"}
+        }));
+        assert_eq!(quotas.len(), 4);
+        assert_eq!(quotas[0].display_name, "Primary (2d)");
+        assert_eq!(quotas[0].used_pct, Some(100.));
+        assert_eq!(quotas[1].display_name, "Secondary (1.5h)");
+        assert_eq!(quotas[1].used_pct, Some(0.));
+        assert_eq!(quotas[2].display_name, "Bonus (30m)");
+        assert_eq!(quotas[3].remaining_pct, Some(100.));
+        assert_eq!(quotas[3].used_pct, Some(0.));
+    }
+
+    #[test]
+    fn credential_and_identity_helpers_walk_nested_values() {
+        let credentials = json!({
+            "providers": {"OpenAI": {"access_token": "access", "refresh_token": "refresh"}}
+        });
+        assert_eq!(
+            OpenAiProvider::token(&credentials).as_deref(),
+            Some("access")
+        );
+        assert_eq!(
+            OpenAiProvider::refresh_token(&credentials).as_deref(),
+            Some("refresh")
+        );
+        assert_eq!(
+            identity_from_value(&json!({"profile": {"email": " person@example.com "}})),
+            Some("person@example.com".into())
+        );
+        assert_eq!(
+            identity_from_value(&json!({"id": "google-oauth2|opaque", "sub": "12345678"})),
+            None
+        );
+        assert_eq!(OpenAiProvider::identity("not-a-jwt"), "OpenAI User");
+    }
+
+    #[test]
+    fn fetch_returns_quotas_and_records_timings() {
+        let http = Http {
+            responses: Mutex::new(vec![response(
+                200,
+                json!({"rate_limit": {"primary_window": {"used_percent": 25, "limit_window_seconds": 3600}}}),
+            )]),
+            requests: Mutex::new(vec![]),
+        };
+        let mut provider = OpenAiProvider::new(account("access", None));
+        let quotas = futures::executor::block_on(provider.fetch(
+            &http,
+            &Process,
+            &RequestContext::default(),
+        ))
+        .unwrap();
+
+        assert_eq!(quotas[0].remaining_pct, Some(75.));
+        assert_eq!(http.requests.lock().unwrap()[0].url, USAGE);
+        assert_eq!(provider.timings().len(), 2);
+    }
+
+    #[test]
+    fn fetch_refreshes_an_unauthorized_token_and_rotates_credentials() {
+        let http = Http {
+            responses: Mutex::new(vec![
+                response(401, Value::Null),
+                response(
+                    200,
+                    json!({"access_token": "new-access", "refresh_token": "new-refresh"}),
+                ),
+                response(
+                    200,
+                    json!({"rate_limit": {"primary_window": {"used_percent": 50}}}),
+                ),
+            ]),
+            requests: Mutex::new(vec![]),
+        };
+        let mut provider = OpenAiProvider::new(account("old-access", Some("old-refresh")));
+        let quotas = futures::executor::block_on(provider.fetch(
+            &http,
+            &Process,
+            &RequestContext::default(),
+        ))
+        .unwrap();
+
+        assert_eq!(quotas[0].used_pct, Some(50.));
+        assert_eq!(provider.a.extra["accessToken"], "new-access");
+        assert_eq!(provider.a.refresh_token.as_deref(), Some("new-refresh"));
+        assert_eq!(http.requests.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn fetch_honors_forced_refresh_before_requesting_usage() {
+        let http = Http {
+            responses: Mutex::new(vec![
+                response(200, json!({"access_token": "fresh-access"})),
+                response(
+                    200,
+                    json!({"rate_limit": {"primary_window": {"used_percent": 10}}}),
+                ),
+            ]),
+            requests: Mutex::new(vec![]),
+        };
+        let mut account = account("stale-access", Some("saved-refresh"));
+        account
+            .extra
+            .insert("_limitwatch_force_refresh".into(), Value::Bool(true));
+        let mut provider = OpenAiProvider::new(account);
+        let quotas = futures::executor::block_on(provider.fetch(
+            &http,
+            &Process,
+            &RequestContext::default(),
+        ))
+        .unwrap();
+
+        assert_eq!(quotas[0].used_pct, Some(10.));
+        assert_eq!(provider.a.extra["accessToken"], "fresh-access");
+        assert_eq!(provider.a.refresh_token.as_deref(), Some("saved-refresh"));
+        assert_eq!(provider.timings()[0].name, "openai_refresh");
+        assert_eq!(http.requests.lock().unwrap()[0].method, "POST");
+    }
+
+    #[test]
+    fn fetch_turns_transport_failures_into_redacted_error_quotas() {
+        let mut provider = OpenAiProvider::new(account("access", None));
+        let quotas = futures::executor::block_on(provider.fetch(
+            &FailingHttp,
+            &Process,
+            &RequestContext::default(),
+        ))
+        .unwrap();
+
+        assert_eq!(quotas[0].extra["is_error"], true);
+        assert!(!quotas[0].extra["message"]
+            .as_str()
+            .unwrap()
+            .contains("secret-token"));
+    }
+}

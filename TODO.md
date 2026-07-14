@@ -1,21 +1,18 @@
 # LimitWatch Roadmap
 
-### New Providers
-- Anthropic (Rate limits and usage)
+## New providers
+
+- Anthropic rate limits and usage
 - Mistral AI
-- Minimax Subscription
-- Kimi (Moonshot.ai subscription)
+- Minimax subscriptions
+- Kimi (Moonshot.ai) subscriptions
 - Z.AI
 - Together AI / Fireworks
-- Opencode Zen (credits billing + active Go/Black subscription, waiting for API access)
+- OpenCode Zen credits and subscriptions
 
-### New Features
-1. **Historical Quota Tracking** - Improve formatting data visualization and analysis for historical quota usage trends.
+## Improvements
 
-### Improvements
-- Add configuration schema validation for accounts.json and config.json with migration support for breaking changes
-- Add quota data caching layer to avoid redundant API calls and support offline viewing of stale data
-
-### Unit Testing & Quality
-- Improve error handling for network timeouts.
-- Add documentation for manual project ID configuration.
+- Add versioned schema validation and migrations for accounts and config data.
+- Improve timeout handling and offline cached-quota views.
+- Expand historical quota visualization and analysis.
+- Document manual project metadata configuration where supported.

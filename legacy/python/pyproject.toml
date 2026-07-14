@@ -1,6 +1,6 @@
 [project]
-name = "limitwatch"
-dynamic = ["version"]
+name = "limitwatch-legacy"
+version = "0.6.1"
 description = "A powerful CLI tool to monitor API quota usage across multiple providers"
 readme = "README.md"
 license = "MIT"
@@ -21,9 +21,6 @@ limitwatch = "limitwatch.cli:cli_entry_point"
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
-
-[tool.hatch.version]
-source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/limitwatch"]

@@ -1,9 +1,10 @@
-# LimitWatch (Rust)
+# LimitWatch
 
-This directory is a self-contained Rust reimplementation of the Python
-LimitWatch CLI. It monitors GitHub Copilot, OpenAI Codex, and OpenRouter.
-Chutes is intentionally omitted from the Rust implementation. Google records
-are preserved for compatibility but Google is intentionally unsupported here.
+This is the primary LimitWatch CLI. It monitors GitHub Copilot, OpenAI Codex,
+and OpenRouter. The archived Python implementation remains in
+[`../legacy/python`](../legacy/python/README.md) for legacy Google and Chutes.ai
+support only; Google records are preserved for compatibility but are unsupported
+by this CLI.
 
 ## Build and install
 
@@ -100,7 +101,7 @@ LIMITWATCH_LOGIN_JSON='{"apiKey":"..."}' limitwatch --login --provider openroute
   offers an optional friendly account name when the returned label is
   redacted/key-like. Non-interactive use must supply `apiKey` explicitly.
 
-The Rust CLI rejects `google` and `chutes` provider requests. Existing Google
+The CLI rejects `google` and `chutes` provider requests. Existing Google
 records remain in `accounts.json` but are ignored by Rust selection, fetching,
 history filters, and completions.
 
@@ -112,11 +113,11 @@ Both implementations default to `~/.config/limitwatch/` and share:
 * `config.json` (`cacheTtl`, `historyDbPath`, `enableHistory`, theme/threshold),
 * `history.db` and its `quota_snapshots` rows.
 
-Unknown JSON fields are retained on normal Rust round trips. Writes use a
+Unknown JSON fields are retained on normal round trips. Writes use a
 temporary file and atomic replacement. A custom history path may begin with
 `~/`. Back up shared files before switching versions during evaluation.
 
-Existing Google records are preserved on normal saves but ignored by Rust
+Existing Google records are preserved on normal saves but ignored by
 selection, fetching, history filters, and completions. `--refresh` requests
 network quota fetching for GitHub Copilot and OpenRouter, and OpenAI token
 refresh where available. The overall deadline still retains a fresh cached
@@ -161,15 +162,14 @@ cargo run -- completion fish >/dev/null
 Integration tests cover config/account interchange, provider parsing and
 contracts, history/export behavior, and CLI behavior.
 
-Sanitized Python-reference expectations are checked into
-`tests/fixtures/parity/`. They use mocked responses, no credentials or live
-APIs. Update them only after comparing equivalent Python inputs and reviewing
-the sanitized diff; preserve explicit divergences such as Google omission.
+Sanitized compatibility expectations are checked into `tests/fixtures/parity/`.
+They use mocked responses, no credentials or live APIs. Update them only after
+reviewing the sanitized diff and preserving explicit divergences such as Google
+omission.
 
-## Known compatibility limits
+## Known limits
 
-The Python implementation remains the behavioral reference. Google OAuth and
-project discovery remain intentionally outside this Rust rewrite. OpenAI
+Google OAuth and project discovery remain outside this CLI. OpenAI
 supports local credential files, device authorization, bounded token polling,
 and refresh-on-401; GitHub login depends on an available `gh` executable when
 no token is supplied. Provider APIs, OAuth policies, network access, and
