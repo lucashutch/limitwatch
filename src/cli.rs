@@ -25,10 +25,12 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+const VERSION: &str = env!("VERGEN_GIT_DESCRIBE");
+
 #[derive(Parser)]
 #[command(
     name = "limitwatch",
-    version = env!("CARGO_PKG_VERSION"),
+    version = VERSION,
     disable_version_flag = true,
     about = "Monitor API quota usage and reset times across all accounts",
     args_conflicts_with_subcommands = true
@@ -213,7 +215,10 @@ struct Fetch {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     if cli.version {
-        println!("limitwatch {}", env!("CARGO_PKG_VERSION"));
+        println!(
+            "limitwatch {}",
+            VERSION.strip_prefix('v').unwrap_or(VERSION)
+        );
         return Ok(());
     }
     match cli.command {

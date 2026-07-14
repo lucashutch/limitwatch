@@ -27,7 +27,7 @@ fetching, history filters, and completions.
 
 ## Install
 
-[Install Rust](https://www.rust-lang.org/tools/install) 1.85 or newer, then
+[Install Rust](https://www.rust-lang.org/tools/install) 1.88 or newer, then
 install LimitWatch from GitHub:
 
 ```sh
@@ -139,6 +139,14 @@ cargo run -- --help
 Integration tests use sanitized fixtures and mocked responses; they do not
 require credentials or live provider APIs. SQLite is bundled, so no system
 SQLite installation is required.
+
+### Versioning
+
+Release builds derive `limitwatch --version` from Git tags with
+[`vergen-git2`](https://crates.io/crates/vergen-git2). An exact `v0.7.0` tag
+reports `limitwatch 0.7.0`, while later development builds include the commit
+distance, abbreviated revision, and dirty state. Builds without Git metadata
+fall back to the package version in `Cargo.toml`.
 
 ## License
 
