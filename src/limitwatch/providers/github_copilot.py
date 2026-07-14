@@ -18,7 +18,7 @@ def _make_github_headers(token: str) -> Dict[str, str]:
     """Build standard GitHub API headers."""
     return {
         "Authorization": f"Bearer {token}",
-        "X-GitHub-Api-Version": "2022-11-28",
+        "X-GitHub-Api-Version": "2026-03-10",
         "Accept": "application/vnd.github+json",
     }
 
@@ -105,6 +105,15 @@ def _current_month_window(now: Optional[datetime] = None) -> Tuple[str, str]:
     return start.date().isoformat(), end.date().isoformat()
 
 
+def _current_billing_month(now: Optional[datetime] = None) -> Tuple[int, int]:
+    """Return current UTC billing year/month for GitHub billing APIs."""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    return now.year, now.month
+
+
 def _billing_usage_urls(owner: str, is_org: bool) -> Tuple[str, str]:
     """Build public billing usage and summary URLs."""
     owner_path = f"orgs/{owner}" if is_org else f"users/{owner}"
@@ -164,6 +173,8 @@ def _parse_ai_credit_billing_payload(
     for row in rows:
         row_used = None
         for key in (
+            "grossQuantity",
+            "gross_quantity",
             "netQuantity",
             "net_quantity",
             "quantity",
@@ -197,6 +208,8 @@ def _parse_ai_credit_billing_payload(
                 "product": row.get("product") or row.get("productName"),
                 "sku": row.get("sku") or row.get("skuName"),
                 "used": row_used,
+                "gross_quantity": row.get("grossQuantity", row.get("gross_quantity")),
+                "net_quantity": row.get("netQuantity", row.get("net_quantity")),
                 "gross_amount": row_gross,
                 "discount_amount": row_discount,
                 "net_amount": row_net,
@@ -209,6 +222,17 @@ def _parse_ai_credit_billing_payload(
         "discount_amount": discount,
         "net_amount": net_amount,
         "billing_rows": parsed_rows,
+    }
+
+
+def _empty_ai_credit_billing_payload() -> Dict[str, Any]:
+    """Build a zero-usage billing result for successful empty billing responses."""
+    return {
+        "used": 0.0,
+        "gross_amount": 0.0,
+        "discount_amount": 0.0,
+        "net_amount": 0.0,
+        "billing_rows": [],
     }
 
 
@@ -765,28 +789,51 @@ class GitHubCopilotProvider(BaseProvider):
         """Fetch and parse public billing usage API; summary is best-effort fallback."""
         usage_url, summary_url = _billing_usage_urls(owner, is_org)
         start_date, end_date = _current_month_window()
-        params = {"start_date": start_date, "end_date": end_date}
+        year, month = _current_billing_month()
+        filtered_params = {
+            "year": year,
+            "month": month,
+            "start_date": start_date,
+            "end_date": end_date,
+            "product": "copilot",
+            "sku": "copilot_ai_credits",
+        }
+        unfiltered_params = {
+            "year": year,
+            "month": month,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+        parsed_usage = None
+        empty_success = None
 
         for url, source in ((usage_url, "usage"), (summary_url, "summary")):
-            if not self.has_time_remaining():
-                return None
-            try:
-                resp = requests.get(
-                    url,
-                    headers=headers,
-                    timeout=self.time_remaining(DEFAULT_API_TIMEOUT),
-                    params=params,
-                )
-                if resp.status_code != 200:
-                    continue
-                parsed = _parse_ai_credit_billing_payload(resp.json())
-                if parsed:
+            for params in (filtered_params, unfiltered_params):
+                if not self.has_time_remaining():
+                    return parsed_usage or empty_success
+                try:
+                    resp = requests.get(
+                        url,
+                        headers=headers,
+                        timeout=self.time_remaining(DEFAULT_API_TIMEOUT),
+                        params=params,
+                    )
+                    if resp.status_code != 200:
+                        continue
+                    parsed = _parse_ai_credit_billing_payload(resp.json())
+                    if not parsed:
+                        parsed = _empty_ai_credit_billing_payload()
+                        parsed["billing_empty"] = True
                     parsed["billing_source"] = source
                     parsed["billing_window"] = {"start": start_date, "end": end_date}
+                    parsed["billing_filtered"] = params is filtered_params
+                    if parsed.get("billing_empty"):
+                        empty_success = parsed
+                        continue
                     return parsed
-            except Exception:
-                continue
-        return None
+                except Exception:
+                    continue
+        return parsed_usage or empty_success
 
     def _try_personal_via_ai_credits(
         self, headers: Dict[str, str]

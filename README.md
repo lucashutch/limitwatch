@@ -2,6 +2,9 @@
 
 A Python CLI tool to monitor quota usage, reset times, and credits across **Google (Gemini CLI + Antigravity)**, **GitHub Copilot**, **Chutes.ai**, **OpenAI Codex**, and **OpenRouter** accounts.
 
+The self-contained [Rust implementation](limitwatch-rs/README.md) supports the
+narrower GitHub Copilot, OpenAI Codex, and OpenRouter provider set.
+
 ## Features
 
 - **🔌 Multi-provider support**: View quotas/credits from Google, GitHub Copilot, Chutes.ai, OpenAI Codex, and OpenRouter in one run.

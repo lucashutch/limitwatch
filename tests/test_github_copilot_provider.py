@@ -148,7 +148,7 @@ def test_github_copilot_provider_fetch_org_quota_error(mock_get):
     def mock_get_side_effect(*args, **kwargs):
         mock_resp = Mock()
         url = args[0] if args else ""
-        if "copilot/billing" in url:
+        if "settings/billing/usage" in url or "copilot/billing" in url:
             mock_resp.status_code = 403
         else:
             mock_resp.status_code = 200
@@ -259,7 +259,7 @@ def test_github_copilot_provider_fetch_org_404_error(mock_get):
     def mock_get_side_effect(*args, **kwargs):
         mock_resp = Mock()
         url = args[0] if args else ""
-        if "copilot/billing" in url:
+        if "settings/billing/usage" in url or "copilot/billing" in url:
             mock_resp.status_code = 404
         else:
             mock_resp.status_code = 200
@@ -747,7 +747,7 @@ class TestMakeGithubHeaders:
     def test_headers_structure(self):
         headers = _make_github_headers("my-token")
         assert headers["Authorization"] == "Bearer my-token"
-        assert "X-GitHub-Api-Version" in headers
+        assert headers["X-GitHub-Api-Version"] == "2026-03-10"
         assert "Accept" in headers
 
 
@@ -1212,7 +1212,7 @@ class TestAICreditBillingHelpers:
         assert start == "2026-06-01"
         assert end == "2026-07-01"
 
-    def test_parse_billing_prefers_net_quantity_and_preserves_discount(self):
+    def test_parse_billing_prefers_gross_quantity_and_preserves_discount(self):
         parsed = _parse_ai_credit_billing_payload(
             {
                 "usageItems": [
@@ -1220,6 +1220,7 @@ class TestAICreditBillingHelpers:
                         "product": "GitHub Copilot",
                         "sku": "Copilot AI Credit",
                         "quantity": 40,
+                        "grossQuantity": 40,
                         "netQuantity": 25,
                         "grossAmount": 0.40,
                         "discountAmount": 0.15,
@@ -1228,7 +1229,7 @@ class TestAICreditBillingHelpers:
                 ]
             }
         )
-        assert parsed["used"] == 25
+        assert parsed["used"] == 40
         assert parsed["gross_amount"] == 0.40
         assert parsed["discount_amount"] == 0.15
         assert parsed["billing_rows"][0]["sku"] == "Copilot AI Credit"
@@ -1278,6 +1279,74 @@ class TestAICreditBillingHelpers:
 
 
 class TestAICreditBillingFetch:
+    @patch("limitwatch.providers.github_copilot.requests.get")
+    def test_ai_credit_billing_uses_2026_version_and_ai_credit_filters(self, mock_get):
+        provider = GitHubCopilotProvider({"githubToken": "tok"})
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "usageItems": [
+                {
+                    "product": "copilot",
+                    "sku": "copilot_ai_credits",
+                    "netQuantity": 10,
+                }
+            ]
+        }
+
+        parsed = provider._fetch_billing_credit_usage(
+            _make_github_headers("tok"), "acme", is_org=True
+        )
+
+        assert parsed["used"] == 10
+        _, kwargs = mock_get.call_args
+        assert kwargs["headers"]["X-GitHub-Api-Version"] == "2026-03-10"
+        assert kwargs["params"]["product"] == "copilot"
+        assert kwargs["params"]["sku"] == "copilot_ai_credits"
+        assert "year" in kwargs["params"]
+        assert "month" in kwargs["params"]
+
+    @patch("limitwatch.providers.github_copilot.requests.get")
+    def test_ai_credit_billing_empty_success_means_zero_usage(self, mock_get):
+        provider = GitHubCopilotProvider({"githubToken": "tok"})
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {"usageItems": []}
+
+        parsed = provider._fetch_billing_credit_usage(
+            _make_github_headers("tok"), "acme", is_org=True
+        )
+
+        assert parsed["used"] == 0
+        assert parsed["billing_empty"] is True
+
+    @patch("limitwatch.providers.github_copilot.requests.get")
+    def test_ai_credit_billing_retries_without_filters(self, mock_get):
+        provider = GitHubCopilotProvider({"githubToken": "tok"})
+
+        def side_effect(url, **kwargs):
+            resp = Mock()
+            resp.status_code = 200
+            if "sku" in kwargs["params"]:
+                resp.json.return_value = {"usageItems": []}
+            else:
+                resp.json.return_value = {
+                    "usageItems": [
+                        {
+                            "product": "GitHub Copilot",
+                            "sku": "copilot_ai_credits",
+                            "grossQuantity": 22,
+                        }
+                    ]
+                }
+            return resp
+
+        mock_get.side_effect = side_effect
+        parsed = provider._fetch_billing_credit_usage(
+            _make_github_headers("tok"), "acme", is_org=True
+        )
+
+        assert parsed["used"] == 22
+        assert parsed["billing_filtered"] is False
+
     @patch("limitwatch.providers.github_copilot.requests.get")
     def test_personal_credits_usage_precedes_summary_and_estimates_allowance(
         self, mock_get

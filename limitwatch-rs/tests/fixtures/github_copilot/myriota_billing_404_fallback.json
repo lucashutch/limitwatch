@@ -1,0 +1,9 @@
+{
+  "billing_paths": [
+    "/orgs/Myriota/settings/billing/usage",
+    "/orgs/Myriota/settings/billing/usage",
+    "/orgs/Myriota/settings/billing/usage/summary",
+    "/orgs/Myriota/settings/billing/usage/summary"
+  ],
+  "queries": ["filtered", "unfiltered", "filtered", "unfiltered"]
+}

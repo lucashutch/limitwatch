@@ -1,0 +1,13 @@
+{
+  "copilot_plan": "business",
+  "organization_login_list": ["OtherOrg", "Myriota"],
+  "quota_reset_date": "2026-08-01T00:00:00Z",
+  "quota_snapshots": {
+    "premium_interactions": {
+      "entitlement": 26000.0,
+      "used": 231.3,
+      "remaining": 25768.7,
+      "percent_remaining": 99.1
+    }
+  }
+}

@@ -38,7 +38,13 @@ config.json
 auth.json
 antigravity-accounts.json
 
+# Rust test fixtures
+!limitwatch-rs/tests/fixtures/config.json
+
 # Test data (if any)
 # tests/data/
 
 .coverage
+
+# Rust build artifacts
+limitwatch-rs/target/

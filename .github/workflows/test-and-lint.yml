@@ -40,5 +40,20 @@ jobs:
           echo "## Coverage Summary" >> $GITHUB_STEP_SUMMARY
           echo '```text' >> $GITHUB_STEP_SUMMARY
           # Extract only the coverage section from the output
-          sed -n '/coverage: platform/,/TOTAL/p' pytest_output.txt >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+           sed -n '/coverage: platform/,/TOTAL/p' pytest_output.txt >> $GITHUB_STEP_SUMMARY
+           echo '```' >> $GITHUB_STEP_SUMMARY
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check Rust implementation
+        working-directory: limitwatch-rs
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all-targets --all-features
