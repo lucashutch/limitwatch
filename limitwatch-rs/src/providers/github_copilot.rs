@@ -643,7 +643,18 @@ impl Provider for GitHubCopilotProvider {
                 .get("githubToken")
                 .and_then(Value::as_str)
                 .context("GitHub token missing; log in with GitHub Copilot")?;
-            let owner = self.a.identity();
+            // GitHub does not support concurrent personal and work Copilot
+            // subscriptions for one account. Choosing an organization therefore means
+            // this account monitors that organization's credits only. Do not probe the
+            // authenticated user's personal billing endpoints: apart from producing an
+            // unwanted Personal row, that can require unrelated billing permissions.
+            let organization = self
+                .a
+                .extra
+                .get("organization")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|org| !org.is_empty());
             let mut out = vec![];
             // This endpoint is independent of billing and is intentionally fetched once.
             let internal = Self::traced_request(
@@ -655,24 +666,12 @@ impl Provider for GitHubCopilotProvider {
             )
             .ok()
             .filter(|r| r.status == 200);
-            let internal_org = self
-                .a
-                .extra
-                .get("organization")
-                .and_then(Value::as_str)
-                .and_then(|org| {
-                    internal
-                        .as_ref()
-                        .and_then(|response| Self::parse_internal_org(&response.body, org))
-                });
-            if self
-                .a
-                .extra
-                .get("organization")
-                .and_then(Value::as_str)
-                .is_some()
-                && internal_org.is_some()
-            {
+            let internal_org = organization.and_then(|org| {
+                internal
+                    .as_ref()
+                    .and_then(|response| Self::parse_internal_org(&response.body, org))
+            });
+            if organization.is_some() && internal_org.is_some() {
                 let mut extra = std::collections::BTreeMap::new();
                 extra.insert(
                     "outcome".into(),
@@ -684,37 +683,42 @@ impl Provider for GitHubCopilotProvider {
                     extra,
                 });
             }
-            let (personal_usage, _) = Self::billing(c, x, token, owner, false, &mut self.t)?;
-            if let Some((body, source, filtered)) = personal_usage {
-                let mut q = Self::parse_billing(&body, None).unwrap_or_else(|| {
+            if organization.is_none() {
+                let (personal_usage, _) =
+                    Self::billing(c, x, token, self.a.identity(), false, &mut self.t)?;
+                if let Some((body, source, filtered)) = personal_usage {
+                    let mut q = Self::parse_billing(&body, None).unwrap_or_else(|| {
+                        let mut q = quota("GitHub Copilot Personal", "Personal", "GitHub Copilot");
+                        q.used = Some(0.);
+                        q.remaining_pct = Some(100.);
+                        q.used_pct = Some(0.);
+                        extra(&mut q, "show_progress", false);
+                        q
+                    });
+                    if let Some(limit) =
+                        Self::plan_allowance(internal.as_ref().map(|r| &r.body).or(Some(
+                            &Value::Object(self.a.extra.clone().into_iter().collect()),
+                        )))
+                    {
+                        q.limit = Some(limit);
+                        q.remaining = Some(limit - q.used.unwrap_or(0.));
+                        q.used_pct = Some(q.used.unwrap_or(0.) / limit * 100.);
+                        q.remaining_pct = Some(100. - q.used_pct.unwrap());
+                    }
+                    q.reset_time = Some(Self::reset());
+                    extra(&mut q, "billing_source", source);
+                    extra(&mut q, "billing_filtered", filtered);
+                    extra(&mut q, "billing_model", "ai_credits");
+                    out.push(q);
+                } else {
                     let mut q = quota("GitHub Copilot Personal", "Personal", "GitHub Copilot");
-                    q.used = Some(0.);
                     q.remaining_pct = Some(100.);
                     q.used_pct = Some(0.);
-                    extra(&mut q, "show_progress", false);
-                    q
-                });
-                if let Some(limit) = Self::plan_allowance(internal.as_ref().map(|r| &r.body).or(
-                    Some(&Value::Object(self.a.extra.clone().into_iter().collect())),
-                )) {
-                    q.limit = Some(limit);
-                    q.remaining = Some(limit - q.used.unwrap_or(0.));
-                    q.used_pct = Some(q.used.unwrap_or(0.) / limit * 100.);
-                    q.remaining_pct = Some(100. - q.used_pct.unwrap());
+                    q.reset_time = Some("Monthly".into());
+                    out.push(q);
                 }
-                q.reset_time = Some(Self::reset());
-                extra(&mut q, "billing_source", source);
-                extra(&mut q, "billing_filtered", filtered);
-                extra(&mut q, "billing_model", "ai_credits");
-                out.push(q);
-            } else {
-                let mut q = quota("GitHub Copilot Personal", "Personal", "GitHub Copilot");
-                q.remaining_pct = Some(100.);
-                q.used_pct = Some(0.);
-                q.reset_time = Some("Monthly".into());
-                out.push(q);
             }
-            if let Some(org) = self.a.extra.get("organization").and_then(Value::as_str) {
+            if let Some(org) = organization {
                 if let Some(q) = internal_org {
                     out.push(q);
                 } else {

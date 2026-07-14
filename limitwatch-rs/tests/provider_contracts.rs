@@ -401,7 +401,7 @@ fn github_internal_user_is_first_single_call_and_selects_configured_org() {
         futures::executor::block_on(provider.fetch(&http, &Proc, &RequestContext::default()))
             .unwrap();
     let org = quotas.iter().find(|q| q.display_name == "myriota").unwrap();
-    assert!(quotas.iter().any(|q| q.display_name == "Personal"));
+    assert!(!quotas.iter().any(|q| q.display_name == "Personal"));
     assert_eq!(org.name, "GitHub Copilot Org (myriota)");
     assert_eq!(org.limit, Some(26000.0));
     assert_eq!(org.used, Some(231.3));
@@ -421,7 +421,7 @@ fn github_internal_user_is_first_single_call_and_selects_configured_org() {
             .count(),
         1
     );
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 1);
 }
 
 #[test]
@@ -483,7 +483,7 @@ fn github_internal_user_malformed_or_no_match_falls_back_to_billing() {
 }
 
 #[test]
-fn github_reloaded_account_fetches_personal_and_myriota_endpoints() {
+fn github_reloaded_work_account_fetches_only_myriota_endpoints() {
     let usage = json!({"usageItems":[{"product":"Copilot premium requests","grossQuantity":2.0}]});
     let http = Http {
         responses: Mutex::new(vec![
@@ -524,7 +524,7 @@ fn github_reloaded_account_fetches_personal_and_myriota_endpoints() {
     let quotas =
         futures::executor::block_on(provider.fetch(&http, &Proc, &RequestContext::default()))
             .unwrap();
-    assert_eq!(quotas.len(), 2);
+    assert_eq!(quotas.len(), 1);
     let requests = http.requests.lock().unwrap();
     assert_eq!(
         requests[0].url,
@@ -532,14 +532,14 @@ fn github_reloaded_account_fetches_personal_and_myriota_endpoints() {
     );
     assert!(requests[1]
         .url
-        .contains("/users/Lucashutch/settings/billing/usage?"));
-    assert!(requests[2]
-        .url
         .contains("/orgs/Myriota/settings/billing/usage?"));
     assert_eq!(
-        requests[3].url,
+        requests[2].url,
         "https://api.github.com/orgs/Myriota/copilot/billing"
     );
+    assert!(requests
+        .iter()
+        .all(|request| !request.url.contains("/users/Lucashutch/")));
     for request in requests.iter() {
         assert!(request.headers["Authorization"].contains("validated-token"));
         assert_eq!(request.headers["Accept"], "application/vnd.github+json");
@@ -604,9 +604,9 @@ fn github_billing_request_sequence() {
             .unwrap()
             .split_once('?')
             .unwrap();
-        assert_eq!(path, fixture["billing_paths"][index]);
+        assert_eq!(path, fixture["billing_paths"][index + 3]);
         let parts = query.split('&').collect::<Vec<_>>();
-        let expected = fixture["queries"][index].as_str().unwrap();
+        let expected = fixture["queries"][index + 3].as_str().unwrap();
         assert_eq!(
             &parts[..2]
                 .iter()
@@ -635,7 +635,7 @@ fn github_billing_request_sequence() {
         fixture["interstitial_paths"][0]
     );
     assert_eq!(
-        requests[7]
+        requests[4]
             .url
             .strip_prefix("https://api.github.com")
             .unwrap(),
@@ -660,12 +660,7 @@ fn github_billing_404_fallback() {
         headers: Default::default(),
     };
     for all_missing in [false, true] {
-        let mut responses = vec![empty(), empty(), empty(), empty()];
-        responses.push(HttpResponse {
-            status: 200,
-            body: json!({"copilot_plan":"pro"}),
-            headers: Default::default(),
-        });
+        let mut responses = vec![empty()]; // /copilot_internal/user
         responses.extend(if all_missing {
             vec![missing(), missing(), missing(), missing()]
         } else {

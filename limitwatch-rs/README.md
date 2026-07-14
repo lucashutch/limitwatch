@@ -85,7 +85,11 @@ LIMITWATCH_LOGIN_JSON='{"apiKey":"..."}' limitwatch --login --provider openroute
 
 * **GitHub Copilot** (`github_copilot`): optional `githubToken`; if omitted,
   the authenticated `gh auth token` is used. The `gh` CLI must then be installed
-  and logged in.
+  and logged in. Selecting an organization during login enables **work-only**
+  quota monitoring: LimitWatch fetches that organization's credits and does not
+  fetch or display personal credits. This is intentional because GitHub does
+  not support concurrent personal and work Copilot subscriptions for one
+  GitHub account.
 * **OpenAI Codex** (`openai`): local OpenCode and Codex credentials are
   discovered first, with stderr feedback for valid/invalid candidates. If none
   can be used, the CLI reports the transition to OpenAI device authorization
