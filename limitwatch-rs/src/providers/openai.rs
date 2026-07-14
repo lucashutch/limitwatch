@@ -92,6 +92,46 @@ pub struct OpenAiProvider {
     a: Account,
     t: Vec<Timing>,
 }
+
+#[derive(Clone, Copy)]
+enum CredentialSource {
+    OpenCode,
+    CodexCli,
+}
+
+impl CredentialSource {
+    fn found_status(self) -> &'static str {
+        match self {
+            Self::OpenCode => "✓ Found OpenCode token",
+            Self::CodexCli => "✓ Found Codex CLI token",
+        }
+    }
+
+    fn invalid_status(self) -> &'static str {
+        match self {
+            Self::OpenCode => "⚠ OpenCode token invalid or expired",
+            Self::CodexCli => "⚠ Codex CLI token invalid",
+        }
+    }
+}
+
+pub fn openai_discovery_status(source: &str, valid: bool) -> Option<&'static str> {
+    let source = match source {
+        "opencode" => CredentialSource::OpenCode,
+        "codex" => CredentialSource::CodexCli,
+        _ => return None,
+    };
+    Some(if valid {
+        source.found_status()
+    } else {
+        source.invalid_status()
+    })
+}
+
+pub fn openai_device_authorization_status() -> &'static str {
+    "Starting device code authorization..."
+}
+
 impl OpenAiProvider {
     pub fn new(a: Account) -> Self {
         Self { a, t: vec![] }
@@ -224,11 +264,11 @@ impl OpenAiProvider {
                     + 30
             })
     }
-    fn credentials(i: &Value, a: &Account) -> Value {
+    fn configured_credentials(i: &Value, a: &Account) -> Option<Value> {
         if i.get("accessToken").and_then(Value::as_str).is_some()
             || i.get("access_token").and_then(Value::as_str).is_some()
         {
-            return i.clone();
+            return Some(i.clone());
         }
         if a.extra
             .get("accessToken")
@@ -236,27 +276,41 @@ impl OpenAiProvider {
             .and_then(Value::as_str)
             .is_some()
         {
-            return Value::Object(a.extra.clone().into_iter().collect());
+            return Some(Value::Object(a.extra.clone().into_iter().collect()));
         }
-        let mut paths = Vec::new();
         if let Some(path) = i.get("authFile").and_then(Value::as_str) {
-            paths.push(PathBuf::from(path));
+            return fs::read_to_string(PathBuf::from(path))
+                .ok()
+                .and_then(|contents| serde_json::from_str::<Value>(&contents).ok())
+                .filter(|value| Self::token(value).is_some());
         }
+        None
+    }
+
+    fn discovered_credentials() -> Vec<(CredentialSource, Value)> {
+        let mut paths = Vec::new();
         if let Some(home) = dirs::home_dir() {
-            paths.push(home.join(".local/share/opencode/auth.json"));
+            paths.push((
+                CredentialSource::OpenCode,
+                home.join(".local/share/opencode/auth.json"),
+            ));
         }
         if let Some(home) = std::env::var_os("CODEX_HOME").map(PathBuf::from) {
-            paths.push(home.join("auth.json"));
+            paths.push((CredentialSource::CodexCli, home.join("auth.json")));
         }
         if let Some(home) = dirs::home_dir() {
-            paths.push(home.join(".codex/auth.json"));
+            paths.push((CredentialSource::CodexCli, home.join(".codex/auth.json")));
         }
         paths
             .into_iter()
-            .filter_map(|path| fs::read_to_string(path).ok())
-            .filter_map(|contents| serde_json::from_str::<Value>(&contents).ok())
-            .find(|value| Self::token(value).is_some())
-            .unwrap_or(Value::Null)
+            .filter_map(|(source, path)| {
+                fs::read_to_string(path)
+                    .ok()
+                    .and_then(|contents| serde_json::from_str::<Value>(&contents).ok())
+                    .filter(|value| Self::token(value).is_some())
+                    .map(|value| (source, value))
+            })
+            .collect()
     }
 
     fn token(value: &Value) -> Option<String> {
@@ -403,6 +457,56 @@ impl OpenAiProvider {
             },
         )
     }
+    fn validate_credentials(
+        c: &dyn HttpClient,
+        x: &RequestContext,
+        mut creds: Value,
+        source: Option<CredentialSource>,
+    ) -> anyhow::Result<(Value, String)> {
+        let mut token = Self::token(&creds)
+            .context("OpenAI credentials omitted access token")?
+            .to_owned();
+        let mut refresh_reported = false;
+        if Self::expired(&token) {
+            let refresh =
+                Self::refresh_token(&creds).context("expired OpenAI token has no refresh token")?;
+            if source.is_some_and(|source| matches!(source, CredentialSource::CodexCli)) {
+                eprintln!("Refreshing Codex CLI token...");
+                refresh_reported = true;
+            }
+            let fresh = Self::refresh(c, x, &refresh)?;
+            token = Self::token(&fresh).context("refresh response omitted access token")?;
+            creds = if Self::refresh_token(&fresh).is_some() {
+                fresh
+            } else {
+                let mut object = fresh.as_object().cloned().unwrap_or_default();
+                object.insert("refresh_token".into(), Value::String(refresh));
+                Value::Object(object)
+            };
+        }
+        let mut validation = Self::usage(c, x, &token)?;
+        if validation.status == 401 {
+            if let Some(refresh) = Self::refresh_token(&creds) {
+                if source.is_some_and(|source| matches!(source, CredentialSource::CodexCli))
+                    && !refresh_reported
+                {
+                    eprintln!("Refreshing Codex CLI token...");
+                }
+                let fresh = Self::refresh(c, x, &refresh)?;
+                token = Self::token(&fresh).context("refresh response omitted access token")?;
+                creds = if Self::refresh_token(&fresh).is_some() {
+                    fresh
+                } else {
+                    let mut object = fresh.as_object().cloned().unwrap_or_default();
+                    object.insert("refresh_token".into(), Value::String(refresh));
+                    Value::Object(object)
+                };
+                validation = Self::usage(c, x, &token)?;
+            }
+        }
+        require_success(validation, "OpenAI token validation")?;
+        Ok((creds, token))
+    }
     fn error_quota(message: impl Into<String>) -> Quota {
         let mut q = quota("OpenAI Codex", "Codex", "OpenAI Codex");
         extra(&mut q, "is_error", true);
@@ -437,104 +541,91 @@ impl Provider for OpenAiProvider {
         x: &'a RequestContext,
     ) -> ProviderFuture<'a, Account> {
         Box::pin(async move {
-            let mut creds = Self::credentials(&i, &self.a);
-            if creds.is_null() {
-                let start = require_success(
-                    Self::post(
-                        c,
-                        x,
-                        "https://auth.openai.com/api/accounts/deviceauth/usercode",
-                        json!({"client_id":CLIENT_ID}),
-                    )?,
-                    "OpenAI device authorization",
-                )?
-                .body;
-                let code = start["device_auth_id"]
-                    .as_str()
-                    .context("device authorization omitted id")?;
-                let interval = number(&start["interval"]).unwrap_or(1.).max(0.) as u64;
-                let user_code = start
-                    .get("user_code")
-                    .or_else(|| start.get("usercode"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                eprintln!(
-                    "OpenAI Device Authorization\nOpen: https://auth.openai.com/codex/device\nEnter code: {user_code}"
-                );
-                let polling_started = Instant::now();
-                loop {
-                    if polling_started.elapsed() >= Duration::from_secs(900) {
-                        bail!("OpenAI device code auth timed out (15 minutes)")
+            let (creds, token) = if let Some(creds) = Self::configured_credentials(&i, &self.a) {
+                Self::validate_credentials(c, x, creds, None)?
+            } else {
+                eprintln!("Checking for existing OpenAI tokens...");
+                let mut validated = None;
+                for (source, creds) in Self::discovered_credentials() {
+                    eprintln!("{}", source.found_status());
+                    match Self::validate_credentials(c, x, creds, Some(source)) {
+                        Ok(credentials) => {
+                            validated = Some(credentials);
+                            break;
+                        }
+                        Err(_) => eprintln!("{}", source.invalid_status()),
                     }
-                    x.remaining(Duration::from_secs(10))?;
-                    let r = Self::post(
-                        c,
-                        x,
-                        "https://auth.openai.com/api/accounts/deviceauth/token",
-                        json!({
-                            "device_auth_id":code,
-                            "user_code":user_code
-                        }),
-                    )?;
-                    if r.status == 200 {
-                        if r.body
-                            .get("authorization_code")
-                            .and_then(Value::as_str)
-                            .is_some()
-                            && r.body
-                                .get("code_verifier")
+                }
+                if let Some(credentials) = validated {
+                    credentials
+                } else {
+                    eprintln!("{}", openai_device_authorization_status());
+                    let start = require_success(
+                        Self::post(
+                            c,
+                            x,
+                            "https://auth.openai.com/api/accounts/deviceauth/usercode",
+                            json!({"client_id":CLIENT_ID}),
+                        )?,
+                        "OpenAI device authorization",
+                    )?
+                    .body;
+                    let code = start["device_auth_id"]
+                        .as_str()
+                        .context("device authorization omitted id")?;
+                    let interval = number(&start["interval"]).unwrap_or(1.).max(0.) as u64;
+                    let user_code = start
+                        .get("user_code")
+                        .or_else(|| start.get("usercode"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    eprintln!(
+                        "OpenAI Device Authorization\nOpen: https://auth.openai.com/codex/device\nEnter code: {user_code}"
+                    );
+                    let polling_started = Instant::now();
+                    let creds = loop {
+                        if polling_started.elapsed() >= Duration::from_secs(900) {
+                            bail!("OpenAI device code auth timed out (15 minutes)")
+                        }
+                        x.remaining(Duration::from_secs(10))?;
+                        let r = Self::post(
+                            c,
+                            x,
+                            "https://auth.openai.com/api/accounts/deviceauth/token",
+                            json!({
+                                "device_auth_id":code,
+                                "user_code":user_code
+                            }),
+                        )?;
+                        if r.status == 200 {
+                            break if r
+                                .body
+                                .get("authorization_code")
                                 .and_then(Value::as_str)
                                 .is_some()
-                        {
-                            creds = Self::exchange_device_code(
-                                c,
-                                x,
-                                r.body["authorization_code"].as_str().unwrap(),
-                                r.body["code_verifier"].as_str().unwrap(),
-                            )?;
-                        } else {
-                            creds = r.body;
+                                && r.body
+                                    .get("code_verifier")
+                                    .and_then(Value::as_str)
+                                    .is_some()
+                            {
+                                Self::exchange_device_code(
+                                    c,
+                                    x,
+                                    r.body["authorization_code"].as_str().unwrap(),
+                                    r.body["code_verifier"].as_str().unwrap(),
+                                )?
+                            } else {
+                                r.body
+                            };
                         }
-                        break;
-                    }
-                    if r.status != 403 && r.status != 404 {
-                        bail!("OpenAI device login failed (HTTP {})", r.status)
-                    }
-                    thread::sleep(Duration::from_secs(interval.clamp(1, 30)));
-                }
-            }
-            let mut token = Self::token(&creds)
-                .context("OpenAI credentials omitted access token")?
-                .to_owned();
-            if Self::expired(&token) {
-                let refresh = Self::refresh_token(&creds)
-                    .context("expired OpenAI token has no refresh token")?;
-                let fresh = Self::refresh(c, x, &refresh)?;
-                token = Self::token(&fresh).context("refresh response omitted access token")?;
-                creds = if Self::refresh_token(&fresh).is_some() {
-                    fresh
-                } else {
-                    let mut object = fresh.as_object().cloned().unwrap_or_default();
-                    object.insert("refresh_token".into(), Value::String(refresh));
-                    Value::Object(object)
-                };
-            }
-            let mut validation = Self::usage(c, x, &token)?;
-            if validation.status == 401 {
-                if let Some(refresh) = Self::refresh_token(&creds) {
-                    let fresh = Self::refresh(c, x, &refresh)?;
-                    token = Self::token(&fresh).context("refresh response omitted access token")?;
-                    creds = if Self::refresh_token(&fresh).is_some() {
-                        fresh
-                    } else {
-                        let mut object = fresh.as_object().cloned().unwrap_or_default();
-                        object.insert("refresh_token".into(), Value::String(refresh));
-                        Value::Object(object)
+                        if r.status != 403 && r.status != 404 {
+                            bail!("OpenAI device login failed (HTTP {})", r.status)
+                        }
+                        thread::sleep(Duration::from_secs(interval.clamp(1, 30)));
                     };
-                    validation = Self::usage(c, x, &token)?;
+                    Self::validate_credentials(c, x, creds, None)?
                 }
-            }
-            require_success(validation, "OpenAI token validation")?;
+            };
             let mut a = self.a.clone();
             a.email = Self::identity_from_api(c, x, &token)
                 .or_else(|| identity_from_value(&creds))

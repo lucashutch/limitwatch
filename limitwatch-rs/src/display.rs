@@ -4,12 +4,7 @@
 //! Rust equivalent here, so layout is intentionally fixed plain text with
 //! small ANSI spans layered on top when stdout is a terminal.
 
-use crate::{
-    history::{DatabaseInfo, WeeklyActivity},
-    model::Quota,
-    providers::base::Provider,
-    storage::Snapshot,
-};
+use crate::{model::Quota, providers::base::Provider};
 use chrono::{DateTime, TimeZone, Utc};
 
 pub fn query_filter(mut quotas: Vec<Quota>, queries: &[String]) -> Vec<Quota> {
@@ -166,6 +161,8 @@ pub fn account_header(
     alias: Option<&str>,
     group: Option<&str>,
 ) -> String {
+    let alias = alias.filter(|value| !value.is_empty());
+    let group = group.filter(|value| !value.is_empty());
     let name = alias.unwrap_or(email);
     let meta = match (alias, group) {
         (Some(_), Some(g)) => format!(" ({email}|{g})"),
@@ -201,7 +198,12 @@ pub fn render_fetch_error(
         return format!(
             "{} {:10}: Warning: {}\n",
             styled(&indicator.to_string(), provider_color, color),
-            alias.unwrap_or(email).chars().take(10).collect::<String>(),
+            alias
+                .filter(|value| !value.is_empty())
+                .unwrap_or(email)
+                .chars()
+                .take(10)
+                .collect::<String>(),
             error
         );
     }
@@ -398,7 +400,7 @@ fn compact_name(name: &str) -> String {
 }
 
 fn compact_account(email: &str, alias: Option<&str>) -> String {
-    let account = alias.unwrap_or(email);
+    let account = alias.filter(|value| !value.is_empty()).unwrap_or(email);
     let account = account.split_once(": ").map_or(account, |(_, value)| value);
     account.chars().take(10).collect()
 }
@@ -459,67 +461,6 @@ fn format_number(value: f64) -> String {
     } else {
         format!("{sign}{grouped}.{fraction}")
     }
-}
-pub fn history_table(data: &[Snapshot]) -> String {
-    if data.is_empty() {
-        return "No historical data found.\n".into();
-    }
-    let mut o="Quota History\nTime             Account          Provider        Quota                    Remaining\n".to_owned();
-    for x in data.iter().take(100) {
-        o += &format!(
-            "{:<16} {:<16} {:<15} {:<24} {}\n",
-            x.timestamp.chars().take(16).collect::<String>(),
-            x.account_email
-                .split('@')
-                .next()
-                .unwrap_or(&x.account_email),
-            x.provider_type,
-            x.display_name.as_deref().unwrap_or(&x.quota_name),
-            x.remaining_pct
-                .map(|v| format!("{v:.1}%"))
-                .unwrap_or_else(|| "N/A".into())
-        );
-    }
-    o
-}
-pub fn history_sparklines(data: &[Snapshot]) -> String {
-    if data.is_empty() {
-        return "No historical data found.\n".into();
-    }
-    let mut o = "Quota History\n".to_owned();
-    for x in data {
-        o += &format!(
-            "{} {} {} {:5.1}%\n",
-            x.account_email,
-            x.provider_type,
-            x.display_name.as_deref().unwrap_or(&x.quota_name),
-            x.remaining_pct.unwrap_or(0.0)
-        );
-    }
-    o
-}
-pub fn history_summary(i: &DatabaseInfo) -> String {
-    format!("History Database Summary\nDatabase: {}\nOldest Record: {}\nNewest Record: {}\nAccounts: {}\nProviders: {}\n",i.path,i.oldest_record.as_deref().unwrap_or("None"),i.newest_record.as_deref().unwrap_or("None"),i.accounts.len(),i.providers.join(", "))
-}
-pub fn weekly(view: &str, w: &WeeklyActivity) -> String {
-    if w.daily_per_account.is_empty() {
-        return "No activity data found for the past week.\n".into();
-    }
-    let title = match view {
-        "heatmap" => "Activity Heatmap (Last 7 Days)",
-        "chart" => "Remaining % Chart",
-        "calendar" => "Weekly Activity Calendar",
-        "bars" => "Daily Credit Consumption (Last 7 Days)",
-        _ => "Quota Statistics Dashboard",
-    };
-    let mut o = format!("{title}\n");
-    for row in &w.daily_per_account {
-        o += &format!(
-            "{} {} {} snapshots\n",
-            row.date, row.account_email, row.record_count
-        )
-    }
-    o
 }
 
 #[cfg(test)]
@@ -741,6 +682,55 @@ mod tests {
             text.contains("O work      : Balance $2.50 remaining"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn text_only_and_ai_credit_rows_keep_labels_in_both_layouts() {
+        let mut credits = Quota {
+            display_name: "AI Credits".into(),
+            used: Some(231.3),
+            used_pct: Some(0.9),
+            remaining_pct: Some(99.1),
+            ..Default::default()
+        };
+        credits
+            .extra
+            .insert("billing_model".into(), json!("ai_credits"));
+        let mut balance = Quota {
+            display_name: "Balance".into(),
+            ..Default::default()
+        };
+        balance.extra.insert("show_progress".into(), json!(false));
+        balance
+            .extra
+            .insert("usage_label".into(), json!("$2.50 remaining"));
+
+        let normal = render_quotas(
+            "octo",
+            Some(""),
+            Some(""),
+            &*provider("github_copilot"),
+            vec![credits.clone(), balance.clone()],
+            false,
+            false,
+        );
+        assert!(normal.starts_with("📧 GitHub Copilot: octo\n"));
+        assert!(normal.contains("AI Credits             "));
+        assert!(normal.contains("231.3 cr (0.9%)"));
+        assert!(normal.contains("Balance                $2.50 remaining\n"));
+
+        let compact = render_quotas(
+            "octo",
+            Some(""),
+            Some(""),
+            &*provider("github_copilot"),
+            vec![credits, balance],
+            true,
+            false,
+        );
+        assert!(compact.contains("H octo      : AI Credits"));
+        assert!(compact.contains("231.3 cr (0.9%)"));
+        assert!(compact.contains("H octo      : Balance $2.50 remaining\n"));
     }
 
     #[test]

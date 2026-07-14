@@ -69,6 +69,28 @@ fn accounts(home: &Path, body: &str) {
     fs::write(dir.join("accounts.json"), body).unwrap();
 }
 
+fn record_history(home: &Path) {
+    use limitwatch::{history::HistoryManager, model::Quota};
+
+    let path = home.join(".config/limitwatch/history.db");
+    let history = HistoryManager::new(Some(path)).unwrap();
+    history
+        .record_quotas(
+            "verbose@example.com",
+            "openai",
+            &[Quota {
+                name: "primary".into(),
+                display_name: "Primary".into(),
+                remaining_pct: Some(80.0),
+                used: Some(20.0),
+                limit: Some(100.0),
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+}
+
 fn terminal_logout(home: &Path, input: &str) -> Output {
     let command = format!("{} --logout", env!("CARGO_BIN_EXE_limitwatch"));
     let mut child = Command::new("script")
@@ -183,6 +205,77 @@ fn invalid_completion_shell_fails() {
         .status()
         .unwrap()
         .success());
+}
+
+#[test]
+fn verbose_history_and_export_keep_stdout_clean_and_report_safe_diagnostics() {
+    let home = TempDir::new().unwrap();
+    record_history(home.path());
+    let db_path = home
+        .path()
+        .join(".config/limitwatch/history.db")
+        .canonicalize()
+        .unwrap();
+
+    let normal_history = bin()
+        .args(["history", "--account", "verbose@example.com"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    let verbose_history = bin()
+        .args(["history", "--account", "verbose@example.com", "--verbose"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(verbose_history.status.success());
+    assert_eq!(normal_history.stdout, verbose_history.stdout);
+    let history_stderr = String::from_utf8(verbose_history.stderr).unwrap();
+    assert!(history_stderr.contains(&format!("history database: {}", db_path.display())));
+    assert!(history_stderr.contains(
+        "history filters: preset=24h, since=none, until=none, account=verbose@example.com, provider=none, quota=none"
+    ));
+    assert!(history_stderr.contains("history result count: 1"));
+
+    let normal_export = bin()
+        .args([
+            "export",
+            "--account",
+            "verbose@example.com",
+            "--provider",
+            "openai",
+        ])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    let verbose_export = bin()
+        .args([
+            "export",
+            "--account",
+            "verbose@example.com",
+            "--provider",
+            "openai",
+            "--verbose",
+        ])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(verbose_export.status.success());
+    assert_eq!(normal_export.stdout, verbose_export.stdout);
+    let export_stderr = String::from_utf8(verbose_export.stderr).unwrap();
+    assert!(export_stderr.contains(&format!("export database: {}", db_path.display())));
+    assert!(export_stderr.contains(
+        "export filters: preset=7d, since=none, until=none, account=verbose@example.com, provider=openai, quota=none"
+    ));
+    assert!(export_stderr.contains("export record count: 1"));
+
+    let redacted = bin()
+        .args(["export", "--quota", "apiKey=do-not-print", "--verbose"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    let redacted_stderr = String::from_utf8(redacted.stderr).unwrap();
+    assert!(redacted_stderr.contains("quota=<redacted>"));
+    assert!(!redacted_stderr.contains("do-not-print"));
 }
 
 #[test]

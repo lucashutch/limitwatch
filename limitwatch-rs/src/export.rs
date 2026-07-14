@@ -42,8 +42,43 @@ impl Exporter<'_> {
             Ok(content)
         }
     }
+    fn info(data: &[crate::storage::Snapshot]) -> ExportInfo {
+        let date_range = if data.is_empty() {
+            None
+        } else {
+            let mut timestamps = data
+                .iter()
+                .map(|snapshot| snapshot.timestamp.clone())
+                .collect::<Vec<_>>();
+            timestamps.sort();
+            Some((
+                timestamps[0].clone(),
+                timestamps[timestamps.len() - 1].clone(),
+            ))
+        };
+        ExportInfo {
+            record_count: data.len(),
+            date_range,
+        }
+    }
     pub fn export_csv(&self, path: Option<&Path>, f: &ExportFilter<'_>) -> Result<String> {
         let data = self.data(f)?;
+        self.export_csv_data(path, data)
+    }
+    pub(crate) fn export_csv_with_info(
+        &self,
+        path: Option<&Path>,
+        f: &ExportFilter<'_>,
+    ) -> Result<(String, ExportInfo)> {
+        let data = self.data(f)?;
+        let info = Self::info(&data);
+        Ok((self.export_csv_data(path, data)?, info))
+    }
+    fn export_csv_data(
+        &self,
+        path: Option<&Path>,
+        data: Vec<crate::storage::Snapshot>,
+    ) -> Result<String> {
         if data.is_empty() {
             return Ok(String::new());
         }
@@ -73,6 +108,23 @@ impl Exporter<'_> {
     }
     pub fn export_markdown(&self, path: Option<&Path>, f: &ExportFilter<'_>) -> Result<String> {
         let data = self.data(f)?;
+        self.export_markdown_data(path, f, data)
+    }
+    pub(crate) fn export_markdown_with_info(
+        &self,
+        path: Option<&Path>,
+        f: &ExportFilter<'_>,
+    ) -> Result<(String, ExportInfo)> {
+        let data = self.data(f)?;
+        let info = Self::info(&data);
+        Ok((self.export_markdown_data(path, f, data)?, info))
+    }
+    fn export_markdown_data(
+        &self,
+        path: Option<&Path>,
+        f: &ExportFilter<'_>,
+        data: Vec<crate::storage::Snapshot>,
+    ) -> Result<String> {
         if data.is_empty() {
             return Ok(String::new());
         }
@@ -137,18 +189,7 @@ impl Exporter<'_> {
         Self::finish(o, path)
     }
     pub fn get_export_info(&self, f: &ExportFilter<'_>) -> Result<ExportInfo> {
-        let d = self.data(f)?;
-        let range = if d.is_empty() {
-            None
-        } else {
-            let mut t = d.iter().map(|x| x.timestamp.clone()).collect::<Vec<_>>();
-            t.sort();
-            Some((t[0].clone(), t[t.len() - 1].clone()))
-        };
-        Ok(ExportInfo {
-            record_count: d.len(),
-            date_range: range,
-        })
+        Ok(Self::info(&self.data(f)?))
     }
 }
 fn csv_field(v: &str) -> String {

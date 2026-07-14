@@ -219,6 +219,34 @@ fn short_account(email: &str) -> &str {
     email.split('@').next().unwrap_or(email)
 }
 
+fn fixed(value: &str, width: usize) -> String {
+    let mut chars = value.chars();
+    let mut output = chars.by_ref().take(width).collect::<String>();
+    if chars.next().is_some() && width > 0 {
+        output.pop();
+        output.push('…');
+    }
+    format!("{output:<width$}")
+}
+
+fn health(value: Option<f64>) -> &'static str {
+    match value {
+        Some(value) if value >= 50.0 => "healthy",
+        Some(value) if value >= 20.0 => "warning",
+        Some(_) => "critical",
+        None => "unknown",
+    }
+}
+
+fn day_label(w: &WeeklyActivity, date: &str) -> String {
+    w.dates
+        .iter()
+        .position(|candidate| candidate == date)
+        .and_then(|index| w.days.get(index))
+        .cloned()
+        .unwrap_or_else(|| date.to_owned())
+}
+
 fn quota_label(snapshot: &Snapshot) -> &str {
     snapshot
         .display_name
@@ -303,7 +331,8 @@ pub fn render_history_sparklines(data: &[Snapshot]) -> String {
     if data.is_empty() {
         return "No historical data found.\n".into();
     }
-    let mut groups = std::collections::BTreeMap::<(String, String, String), Vec<f64>>::new();
+    let mut groups =
+        std::collections::BTreeMap::<(String, String, String), Vec<(String, f64)>>::new();
     for row in data {
         if let Some(value) = row.remaining_pct {
             groups
@@ -313,13 +342,19 @@ pub fn render_history_sparklines(data: &[Snapshot]) -> String {
                     row.quota_name.clone(),
                 ))
                 .or_default()
-                .push(value);
+                .push((row.timestamp.clone(), value));
         }
     }
-    let mut out = String::from(
-        "Quota History\nAccount | Provider | Quota | Trend                 | Current | Min | Max\n",
+    let mut out = format!("Quota History ({} snapshots)\n", data.len());
+    out.push_str(
+        "Account        Provider       Quota                    Trend / sparkline                  Current     Min     Max  Health\n",
     );
-    for ((account, provider, quota), values) in groups {
+    for ((account, provider, quota), mut samples) in groups {
+        samples.sort_by(|left, right| left.0.cmp(&right.0));
+        let values = samples
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect::<Vec<_>>();
         if values.is_empty() {
             continue;
         }
@@ -327,15 +362,18 @@ pub fn render_history_sparklines(data: &[Snapshot]) -> String {
         let min = values.iter().copied().reduce(f64::min);
         let max = values.iter().copied().reduce(f64::max);
         out.push_str(&format!(
-            "{} | {} | {} | {} {} | {} | {} | {}\n",
-            short_account(&account),
-            provider,
-            quota,
-            sparkline(&values, 20),
-            trend(&values),
+            "{} {} {} {} {:>7} {:>7} {:>7}  {}\n",
+            fixed(short_account(&account), 14),
+            fixed(&provider, 14),
+            fixed(&quota, 24),
+            fixed(
+                &format!("{} {}", sparkline(&values, 16), trend(&values)),
+                32
+            ),
             pct(current, 1),
-            pct(min, 0),
-            pct(max, 0)
+            pct(min, 1),
+            pct(max, 1),
+            health(current),
         ));
     }
     out.push_str(&format!(
@@ -356,7 +394,7 @@ pub fn render_history_table(data: &[Snapshot]) -> String {
     }
     let shown = data.len().min(100);
     let mut out = format!("Quota History ({shown} of {} records)\n", data.len());
-    out.push_str("Time             Account          Provider        Quota                    Remaining   Bar          Used      Limit\n");
+    out.push_str("Time             Account        Provider       Quota                    Remaining  Bar           Used      Limit\n");
     for row in data.iter().take(100) {
         let time = DateTime::parse_from_rfc3339(&row.timestamp)
             .map(|time| time.format("%b %d %H:%M").to_string())
@@ -369,10 +407,11 @@ pub fn render_history_table(data: &[Snapshot]) -> String {
             })
             .unwrap_or_else(|| "░".repeat(10));
         out.push_str(&format!(
-            "{time:<16} {:<16} {:<15} {:<24} {:>9} {bar} {:>9} {:>9}\n",
-            short_account(&row.account_email),
-            row.provider_type,
-            quota_label(row),
+            "{} {} {} {} {:>9} {bar} {:>9} {:>9}\n",
+            fixed(&time, 16),
+            fixed(short_account(&row.account_email), 14),
+            fixed(&row.provider_type, 14),
+            fixed(quota_label(row), 24),
             pct(row.remaining_pct, 1),
             number(row.used),
             number(row.limit_val)
@@ -418,12 +457,22 @@ pub fn render_weekly(view: &str, w: &WeeklyActivity) -> String {
     let mut out = String::new();
     match view {
         "heatmap" => {
-            out.push_str("Activity Heatmap (Last 7 Days)\nAccount | ");
-            out.push_str(&w.days.join(" | "));
-            out.push_str(" | Total\n");
+            let peak = w
+                .daily_per_account
+                .iter()
+                .map(|row| row.record_count)
+                .max()
+                .unwrap_or(1)
+                .max(1);
+            out.push_str("Activity Heatmap (Last 7 Days)\nAccount          | ");
+            for (index, date) in w.dates.iter().enumerate() {
+                let day = w.days.get(index).map(String::as_str).unwrap_or(date);
+                out.push_str(&format!("{} | ", fixed(day, 5)));
+            }
+            out.push_str("Total\n");
             for account in &w.accounts {
                 let mut total = 0;
-                out.push_str(short_account(account));
+                out.push_str(&format!("{} | ", fixed(short_account(account), 16)));
                 for date in &w.dates {
                     let count = w
                         .daily_per_account
@@ -432,27 +481,38 @@ pub fn render_weekly(view: &str, w: &WeeklyActivity) -> String {
                         .map(|row| row.record_count)
                         .unwrap_or(0);
                     total += count;
-                    out.push_str(&format!(" | {count}"));
+                    let glyph = match count {
+                        0 => '·',
+                        _ => match ((count * 4 + peak - 1) / peak).clamp(1, 4) {
+                            1 => '░',
+                            2 => '▒',
+                            3 => '▓',
+                            _ => '█',
+                        },
+                    };
+                    out.push_str(&format!("  {glyph}   | "));
                 }
-                out.push_str(&format!(" | {total}\n"));
+                out.push_str(&format!("{total}\n"));
             }
-            out.push_str("Total | ");
+            let mut grand_total = 0;
+            out.push_str("Total            | ");
             for date in &w.dates {
-                out.push_str(&format!(
-                    "{} |",
-                    w.daily_per_account
-                        .iter()
-                        .filter(|row| &row.date == date)
-                        .map(|row| row.record_count)
-                        .sum::<i64>()
-                ));
+                let total = w
+                    .daily_per_account
+                    .iter()
+                    .filter(|row| &row.date == date)
+                    .map(|row| row.record_count)
+                    .sum::<i64>();
+                grand_total += total;
+                out.push_str(&format!("{:^5} | ", total));
             }
-            out.push_str("\nLegend: counts are activity intensity (plain-text equivalent)\n");
+            out.push_str(&format!("{grand_total}\n"));
+            out.push_str("Legend: · none  ░ low  ▒ medium  ▓ high  █ peak (relative activity)\n");
         }
         "chart" => {
             out.push_str("Remaining % Chart\n");
             for account in &w.accounts {
-                out.push_str(&format!("{}\n", short_account(account)));
+                out.push_str(&format!("{} — remaining %\n", short_account(account)));
                 for threshold in [100, 80, 60, 40, 20, 0] {
                     out.push_str(&format!("{threshold:>3}% |"));
                     for date in &w.dates {
@@ -462,17 +522,40 @@ pub fn render_weekly(view: &str, w: &WeeklyActivity) -> String {
                             .find(|row| &row.account_email == account && &row.date == date)
                             .map(|row| row.avg_remaining_pct);
                         out.push_str(if value.is_some_and(|value| value >= threshold as f64) {
-                            " ███ "
+                            " ████ "
                         } else {
-                            "     "
+                            "      "
                         });
                     }
                     out.push('\n');
                 }
                 out.push_str("     +");
-                out.push_str(&"─────".repeat(w.dates.len()));
+                out.push_str(&"──────".repeat(w.dates.len()));
                 out.push('\n');
-                out.push_str(&format!("       {}\n", w.days.join("   ")));
+                out.push_str("       ");
+                for (index, date) in w.dates.iter().enumerate() {
+                    let day = w.days.get(index).map(String::as_str).unwrap_or(date);
+                    out.push_str(&format!("{:^6}", fixed(day, 5)));
+                }
+                out.push('\n');
+                let values = w
+                    .dates
+                    .iter()
+                    .filter_map(|date| {
+                        w.daily_per_account
+                            .iter()
+                            .find(|row| &row.account_email == account && &row.date == date)
+                            .map(|row| row.avg_remaining_pct)
+                    })
+                    .collect::<Vec<_>>();
+                if !values.is_empty() {
+                    out.push_str(&format!(
+                        "       avg {:>5.1}%  min {:>5.1}%  max {:>5.1}%\n",
+                        values.iter().sum::<f64>() / values.len() as f64,
+                        values.iter().copied().fold(f64::INFINITY, f64::min),
+                        values.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+                    ));
+                }
             }
         }
         "calendar" => {
@@ -500,25 +583,34 @@ pub fn render_weekly(view: &str, w: &WeeklyActivity) -> String {
             }
         }
         "bars" => {
-            out.push_str("Daily Credit Consumption (Last 7 Days)\nDay | Usage | Credits | Accounts | % of Peak\n");
+            const BAR_WIDTH: usize = 20;
+            out.push_str("Daily Credit Consumption (Last 7 Days)\nDay      Usage                  Credits  Accounts  % Peak\n");
             let peak = w
                 .daily_totals
                 .iter()
                 .map(|row| row.total_used)
                 .fold(0.0, f64::max);
             let mut total = 0.0;
-            for (index, row) in w.daily_totals.iter().enumerate() {
+            let mut totals = w.daily_totals.iter().collect::<Vec<_>>();
+            totals.sort_by(|left, right| left.date.cmp(&right.date));
+            for row in totals {
                 let percent = if peak > 0.0 {
                     row.total_used / peak * 100.0
                 } else {
                     0.0
                 };
                 total += row.total_used;
+                let filled = if row.total_used > 0.0 {
+                    ((percent / 100.0 * BAR_WIDTH as f64).ceil() as usize).clamp(1, BAR_WIDTH)
+                } else {
+                    0
+                };
                 out.push_str(&format!(
-                    "{} | {} | {:.0} | {} | {:.0}%\n",
-                    w.days.get(index).map(String::as_str).unwrap_or(&row.date),
-                    "█".repeat((percent / 10.0) as usize),
-                    row.total_used,
+                    "{:<8} {}{} {:>8} {:>9} {:>7.0}%\n",
+                    fixed(&day_label(w, &row.date), 7),
+                    "█".repeat(filled),
+                    "░".repeat(BAR_WIDTH - filled),
+                    number(Some(row.total_used)),
                     row.account_count,
                     percent
                 ));
@@ -588,7 +680,7 @@ pub fn render_stats(
         ));
     }
     if !aggregation.is_empty() {
-        out.push_str("\nPer-Quota Statistics\nAccount | Provider | Quota | Avg % | Min % | Max % | Volatility | Samples\n");
+        out.push_str("\nPer-Quota Statistics\nAccount        Provider       Quota                    Avg %    Min %    Max %  Volatility       Samples\n");
         for row in aggregation {
             let volatility = match (row.min_remaining, row.max_remaining, row.avg_remaining) {
                 (Some(min), Some(max), Some(avg)) if avg > 0.0 => format!(
@@ -605,15 +697,15 @@ pub fn render_stats(
                 _ => "--".into(),
             };
             out.push_str(&format!(
-                "{} | {} | {} | {} | {} | {} | {} | {}\n",
-                short_account(&row.account_email),
-                row.provider_type,
-                row.display_name.as_deref().unwrap_or(&row.quota_name),
+                "{} {} {} {:>7} {:>7} {:>7}  {:<15} {:>7}\n",
+                fixed(short_account(&row.account_email), 14),
+                fixed(&row.provider_type, 14),
+                fixed(row.display_name.as_deref().unwrap_or(&row.quota_name), 24),
                 pct(row.avg_remaining, 1),
                 pct(row.min_remaining, 1),
                 pct(row.max_remaining, 1),
-                volatility,
-                row.data_points
+                fixed(&volatility, 15),
+                row.data_points,
             ));
         }
     }
@@ -631,4 +723,118 @@ pub fn render_stats(
         ));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::{CreditConsumption, DailyActivity, Snapshot};
+
+    fn snapshot(remaining_pct: f64, timestamp: &str) -> Snapshot {
+        Snapshot {
+            id: 1,
+            account_email: "very-long-account@example.com".into(),
+            provider_type: "openrouter-with-a-long-name".into(),
+            quota_name: "very-long-quota-name".into(),
+            display_name: Some("A quota with a deliberately long label".into()),
+            remaining_pct: Some(remaining_pct),
+            used: Some(1234.0),
+            limit_val: Some(5000.0),
+            reset_time: None,
+            timestamp: timestamp.into(),
+            hour_bucket: "2026-07-14 12".into(),
+            created_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn history_tables_keep_columns_fixed_and_include_health() {
+        let rows = vec![
+            snapshot(80.0, "2026-07-14T12:30:00+00:00"),
+            snapshot(15.0, "2026-07-14T10:30:00+00:00"),
+        ];
+        let sparklines = render_history_sparklines(&rows);
+        assert!(sparklines.contains("Trend / sparkline"));
+        assert!(sparklines.contains("^ rising"));
+        assert!(sparklines.contains("healthy"));
+        assert!(sparklines.contains("very-long-acc…"));
+
+        let table = render_history_table(&rows);
+        assert!(
+            table.contains("very-long-acc… openrouter-wi… A quota with a delibera…"),
+            "{table}"
+        );
+        assert!(table.contains("████████░░"));
+        assert!(table.contains("█░░░░░░░░░"));
+    }
+
+    #[test]
+    fn heatmap_scales_relative_glyphs_and_keeps_totals() {
+        let weekly = WeeklyActivity {
+            daily_per_account: vec![
+                DailyActivity {
+                    date: "2026-07-13".into(),
+                    account_email: "alpha@example.com".into(),
+                    provider_type: "openai".into(),
+                    record_count: 1,
+                    avg_remaining_pct: 80.0,
+                    min_remaining_pct: 80.0,
+                    max_remaining_pct: 80.0,
+                    total_used: None,
+                    first_record: String::new(),
+                    last_record: String::new(),
+                },
+                DailyActivity {
+                    date: "2026-07-14".into(),
+                    account_email: "alpha@example.com".into(),
+                    provider_type: "openai".into(),
+                    record_count: 4,
+                    avg_remaining_pct: 60.0,
+                    min_remaining_pct: 60.0,
+                    max_remaining_pct: 60.0,
+                    total_used: None,
+                    first_record: String::new(),
+                    last_record: String::new(),
+                },
+                DailyActivity {
+                    date: "2026-07-14".into(),
+                    account_email: "beta@example.com".into(),
+                    provider_type: "openai".into(),
+                    record_count: 2,
+                    avg_remaining_pct: 40.0,
+                    min_remaining_pct: 40.0,
+                    max_remaining_pct: 40.0,
+                    total_used: None,
+                    first_record: String::new(),
+                    last_record: String::new(),
+                },
+            ],
+            daily_totals: vec![CreditConsumption {
+                date: "2026-07-14".into(),
+                total_used: 10.0,
+                account_count: 2,
+                provider_count: 1,
+                record_count: 6,
+            }],
+            accounts: vec!["alpha@example.com".into(), "beta@example.com".into()],
+            days: vec!["Mon 13".into(), "Tue 14".into()],
+            dates: vec!["2026-07-13".into(), "2026-07-14".into()],
+            date_range: (Some("2026-07-13".into()), Some("2026-07-14".into())),
+        };
+
+        let text = render_weekly("heatmap", &weekly);
+        assert!(
+            text.contains("alpha            |   ░   |   █   | 5"),
+            "{text}"
+        );
+        assert!(
+            text.contains("beta             |   ·   |   ▒   | 2"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Total            |   1   |   6   | 7"),
+            "{text}"
+        );
+        assert!(text.contains("Legend: · none  ░ low  ▒ medium  ▓ high  █ peak"));
+    }
 }

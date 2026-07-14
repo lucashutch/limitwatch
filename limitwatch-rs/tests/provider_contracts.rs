@@ -133,6 +133,66 @@ fn parsers_accept_representative_payloads() {
 }
 
 #[test]
+fn openrouter_redacted_key_labels_require_a_safe_friendly_name() {
+    let http = Http {
+        responses: Mutex::new(vec![HttpResponse {
+            status: 200,
+            body: json!({"data":{"label":"sk-or-v1-abc...xyz"}}),
+            headers: Default::default(),
+        }]),
+        requests: Mutex::new(vec![]),
+    };
+    let mut provider = providers::create(Account {
+        provider_type: "openrouter".into(),
+        email: "pending".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let logged_in = futures::executor::block_on(provider.login(
+        json!({"apiKey":"sk-or-secret"}),
+        &http,
+        &Proc,
+        &RequestContext::default(),
+    ))
+    .unwrap();
+
+    assert_eq!(logged_in.email, "OpenRouter Key");
+    assert_eq!(logged_in.extra["_limitwatch_openrouter_needs_name"], true);
+    assert!(!serde_json::to_string(&logged_in)
+        .unwrap()
+        .contains("abc...xyz"));
+}
+
+#[test]
+fn openai_discovery_and_device_progress_are_safe_and_specific() {
+    use limitwatch::providers::openai::{
+        openai_device_authorization_status, openai_discovery_status,
+    };
+
+    assert_eq!(
+        openai_discovery_status("opencode", true),
+        Some("✓ Found OpenCode token")
+    );
+    assert_eq!(
+        openai_discovery_status("opencode", false),
+        Some("⚠ OpenCode token invalid or expired")
+    );
+    assert_eq!(
+        openai_discovery_status("codex", true),
+        Some("✓ Found Codex CLI token")
+    );
+    assert_eq!(
+        openai_discovery_status("codex", false),
+        Some("⚠ Codex CLI token invalid")
+    );
+    assert_eq!(openai_discovery_status("unknown", true), None);
+    assert_eq!(
+        openai_device_authorization_status(),
+        "Starting device code authorization..."
+    );
+}
+
+#[test]
 fn python_reference_reset_and_failure_fixture_matches() {
     let f: Value = serde_json::from_str(include_str!("fixtures/parity/reference.json")).unwrap();
     for c in f["resets"].as_array().unwrap() {

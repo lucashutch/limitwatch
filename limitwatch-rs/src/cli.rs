@@ -894,9 +894,10 @@ fn login(auth: &mut AuthManager, a: &ShowArgs) -> Result<()> {
         Ok(client) => client,
         Err(error) => return action_error(a, error),
     };
-    let mut input = std::env::var("LIMITWATCH_LOGIN_JSON")
-        .ok()
-        .and_then(|x| serde_json::from_str(&x).ok())
+    let login_json = std::env::var("LIMITWATCH_LOGIN_JSON").ok();
+    let mut input = login_json
+        .as_deref()
+        .and_then(|x| serde_json::from_str(x).ok())
         .unwrap_or(Value::Null);
     if p == "github_copilot" && input.is_null() {
         let http = match crate::quota_client::SharedHttp::new() {
@@ -908,11 +909,17 @@ fn login(auth: &mut AuthManager, a: &ShowArgs) -> Result<()> {
             Err(error) => return action_error(a, error),
         };
     }
+    let interactive = io::stdin().is_terminal() && io::stdout().is_terminal() && !a.json_output;
+    if p == "openrouter" {
+        input = openrouter_login_input(input, interactive && login_json.is_none(), || {
+            prompt("Enter OpenRouter API key: ")
+        })?;
+    }
     let http = match crate::quota_client::SharedHttp::new() {
         Ok(http) => http,
         Err(error) => return action_error(a, error),
     };
-    let account = match futures::executor::block_on(client.login(
+    let mut account = match futures::executor::block_on(client.login(
         input,
         &http,
         &Proc,
@@ -921,6 +928,19 @@ fn login(auth: &mut AuthManager, a: &ShowArgs) -> Result<()> {
         Ok(account) => account,
         Err(error) => return action_error(a, error),
     };
+    if p == "openrouter"
+        && account
+            .extra
+            .remove("_limitwatch_openrouter_needs_name")
+            .and_then(|value| value.as_bool())
+            == Some(true)
+        && interactive
+    {
+        let name = prompt("Key validated. Enter a friendly name for this account (optional): ")?;
+        if !name.is_empty() {
+            account.email = name;
+        }
+    }
     let email = match auth.login(account) {
         Ok(email) => email,
         Err(error) => return action_error(a, error),
@@ -932,6 +952,19 @@ fn login(auth: &mut AuthManager, a: &ShowArgs) -> Result<()> {
     }
     Ok(())
 }
+fn openrouter_login_input<F>(input: Value, interactive: bool, prompt_for_key: F) -> Result<Value>
+where
+    F: FnOnce() -> Result<String>,
+{
+    if !input.is_null() || !interactive {
+        return Ok(input);
+    }
+    let key = prompt_for_key()?;
+    if key.is_empty() {
+        bail!("OpenRouter API key is required")
+    }
+    Ok(json!({"apiKey": key}))
+}
 fn prompt(message: &str) -> Result<String> {
     eprint!("{message}");
     io::stderr().flush()?;
@@ -939,6 +972,7 @@ fn prompt(message: &str) -> Result<String> {
     io::stdin().read_line(&mut value)?;
     Ok(value.trim().to_owned())
 }
+
 fn github_login_input(
     http: &dyn HttpClient,
     proc: &dyn ProcessRunner,
@@ -1010,9 +1044,13 @@ fn history(a: HistoryArgs) -> Result<()> {
     let c = Config::new(None);
     let h = HistoryManager::new(Some(c.history_db_path()))?;
     if a.summary {
-        return print_ok(crate::history::render_history_summary(
-            &h.get_database_info()?,
-        ));
+        verbose_history_context(a.verbose, &h, &VerboseFilters::default());
+        let info = h.get_database_info()?;
+        if a.verbose {
+            let records = h.get_history(None, None, None, None, None, None)?.len();
+            eprintln!("[verbose] history result count: {records}");
+        }
+        return print_ok(crate::history::render_history_summary(&info));
     }
     let view = if a.heatmap {
         Some("heatmap")
@@ -1031,6 +1069,15 @@ fn history(a: HistoryArgs) -> Result<()> {
         let weekly = h.get_weekly_activity(a.account.as_deref(), a.provider.as_deref())?;
         if view == "stats" {
             let preset = a.preset.as_deref().or(Some("7d"));
+            let filters = VerboseFilters {
+                preset,
+                since: a.since.as_deref(),
+                until: a.until.as_deref(),
+                account: a.account.as_deref(),
+                provider: a.provider.as_deref(),
+                quota: a.quota.as_deref(),
+            };
+            verbose_history_context(a.verbose, &h, &filters);
             let history = h.get_history(
                 preset,
                 a.since.as_deref(),
@@ -1046,11 +1093,37 @@ fn history(a: HistoryArgs) -> Result<()> {
                 a.account.as_deref(),
                 a.provider.as_deref(),
             )?;
+            if a.verbose {
+                eprintln!("[verbose] history record count: {}", history.len());
+                eprintln!(
+                    "[verbose] history aggregation result count: {}",
+                    aggregation.len()
+                );
+                eprintln!(
+                    "[verbose] history weekly result count: {}",
+                    weekly.daily_per_account.len() + weekly.daily_totals.len()
+                );
+            }
             return print_ok(crate::history::render_stats(
                 &history,
                 &weekly,
                 &aggregation,
             ));
+        }
+        let filters = VerboseFilters {
+            preset: Some("7d"),
+            since: None,
+            until: None,
+            account: a.account.as_deref(),
+            provider: a.provider.as_deref(),
+            quota: None,
+        };
+        verbose_history_context(a.verbose, &h, &filters);
+        if a.verbose {
+            eprintln!(
+                "[verbose] history weekly result count: {}",
+                weekly.daily_per_account.len() + weekly.daily_totals.len()
+            );
         }
         return print_ok(crate::history::render_weekly(view, &weekly));
     }
@@ -1058,6 +1131,15 @@ fn history(a: HistoryArgs) -> Result<()> {
         .preset
         .as_deref()
         .or(if a.since.is_none() { Some("24h") } else { None });
+    let filters = VerboseFilters {
+        preset,
+        since: a.since.as_deref(),
+        until: a.until.as_deref(),
+        account: a.account.as_deref(),
+        provider: a.provider.as_deref(),
+        quota: a.quota.as_deref(),
+    };
+    verbose_history_context(a.verbose, &h, &filters);
     let d = h.get_history(
         preset,
         a.since.as_deref(),
@@ -1066,10 +1148,13 @@ fn history(a: HistoryArgs) -> Result<()> {
         a.provider.as_deref(),
         a.quota.as_deref(),
     )?;
+    if a.verbose {
+        eprintln!("[verbose] history result count: {}", d.len());
+    }
     print_ok(if a.table {
-        display::history_table(&d)
+        crate::history::render_history_table(&d)
     } else {
-        display::history_sparklines(&d)
+        crate::history::render_history_sparklines(&d)
     })
 }
 fn export(a: ExportArgs) -> Result<()> {
@@ -1087,10 +1172,14 @@ fn export(a: ExportArgs) -> Result<()> {
         provider_type: a.provider.as_deref(),
         quota_name: a.quota.as_deref(),
     };
-    let s = match a.format {
-        Format::Csv => e.export_csv(a.output.as_deref(), &f)?,
-        Format::Markdown => e.export_markdown(a.output.as_deref(), &f)?,
+    verbose_export_context(a.verbose, &h, &f);
+    let (s, info) = match a.format {
+        Format::Csv => e.export_csv_with_info(a.output.as_deref(), &f)?,
+        Format::Markdown => e.export_markdown_with_info(a.output.as_deref(), &f)?,
     };
+    if a.verbose {
+        eprintln!("[verbose] export record count: {}", info.record_count);
+    }
     if let Some(p) = a.output {
         println!("Exported to {}", p.display())
     } else {
@@ -1098,7 +1187,114 @@ fn export(a: ExportArgs) -> Result<()> {
     }
     Ok(())
 }
+#[derive(Default)]
+struct VerboseFilters<'a> {
+    preset: Option<&'a str>,
+    since: Option<&'a str>,
+    until: Option<&'a str>,
+    account: Option<&'a str>,
+    provider: Option<&'a str>,
+    quota: Option<&'a str>,
+}
+fn verbose_history_context(verbose: bool, history: &HistoryManager, filters: &VerboseFilters<'_>) {
+    if verbose {
+        eprintln!("[verbose] history database: {}", resolved_db_path(history));
+        eprintln!("[verbose] history filters: {}", verbose_filters(filters));
+    }
+}
+fn verbose_export_context(verbose: bool, history: &HistoryManager, filter: &ExportFilter<'_>) {
+    if verbose {
+        eprintln!("[verbose] export database: {}", resolved_db_path(history));
+        eprintln!(
+            "[verbose] export filters: {}",
+            verbose_filters(&VerboseFilters {
+                preset: filter.preset,
+                since: filter.since,
+                until: filter.until,
+                account: filter.account_email,
+                provider: filter.provider_type,
+                quota: filter.quota_name,
+            })
+        );
+    }
+}
+fn resolved_db_path(history: &HistoryManager) -> String {
+    history
+        .storage
+        .db_path
+        .canonicalize()
+        .unwrap_or_else(|_| history.storage.db_path.clone())
+        .display()
+        .to_string()
+}
+fn verbose_filters(filters: &VerboseFilters<'_>) -> String {
+    [
+        ("preset", filters.preset),
+        ("since", filters.since),
+        ("until", filters.until),
+        ("account", filters.account),
+        ("provider", filters.provider),
+        ("quota", filters.quota),
+    ]
+    .into_iter()
+    .map(|(name, value)| format!("{name}={}", redact_diagnostic_value(value)))
+    .collect::<Vec<_>>()
+    .join(", ")
+}
+fn redact_diagnostic_value(value: Option<&str>) -> String {
+    let Some(value) = value else {
+        return "none".into();
+    };
+    let lower = value.to_ascii_lowercase();
+    if lower.contains("token")
+        || lower.contains("secret")
+        || lower.contains("password")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.starts_with("sk-")
+    {
+        "<redacted>".into()
+    } else {
+        crate::providers::base::sanitize_diagnostic(value)
+            .chars()
+            .take(120)
+            .collect()
+    }
+}
 fn print_ok(s: String) -> Result<()> {
     print!("{s}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openrouter_key_input_is_tty_only_and_preserves_explicit_input() {
+        let prompted = std::cell::Cell::new(false);
+        let prompted_input = openrouter_login_input(Value::Null, true, || {
+            prompted.set(true);
+            Ok("sk-or-test".into())
+        })
+        .unwrap();
+        assert!(prompted.get());
+        assert_eq!(prompted_input["apiKey"], "sk-or-test");
+
+        let explicit = json!({"apiKey": "from-json"});
+        assert_eq!(
+            openrouter_login_input(explicit.clone(), true, || -> Result<String> {
+                panic!("explicit input must not prompt")
+            })
+            .unwrap(),
+            explicit
+        );
+        assert!(
+            openrouter_login_input(Value::Null, false, || -> Result<String> {
+                panic!("non-TTY login must not prompt")
+            })
+            .unwrap()
+            .is_null()
+        );
+    }
 }

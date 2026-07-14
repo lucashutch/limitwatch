@@ -24,6 +24,11 @@ impl OpenRouterProvider {
         let used = number(&d["total_usage"]);
         Self::build("OpenRouter Credits", limit, used, "credits", None)
     }
+    /// OpenRouter uses a redacted key as the label when no dashboard name was
+    /// assigned. It is not a useful (or safe) account identifier.
+    pub fn is_redacted_key_label(label: &str) -> bool {
+        label.trim().to_ascii_lowercase().starts_with("sk-or")
+    }
     fn build(name: &str, limit: f64, used: f64, ep: &str, label: Option<&str>) -> Quota {
         let rem = (limit - used).max(0.);
         let display = if limit > 0. || ep == "credits" {
@@ -97,13 +102,27 @@ impl Provider for OpenRouterProvider {
             }
             let mut a = self.a.clone();
             a.api_key = Some(k.into());
-            a.email = i["name"]
+            let name = i["name"]
                 .as_str()
-                .filter(|name| !name.trim().is_empty())
-                .or_else(|| r.body["data"]["label"].as_str())
+                .map(str::trim)
+                .filter(|name| !name.is_empty());
+            let label = r.body["data"]["label"]
+                .as_str()
                 .or_else(|| r.body["data"]["name"].as_str())
-                .unwrap_or("OpenRouter Key")
-                .into();
+                .unwrap_or("OpenRouter Key");
+            if let Some(name) = name {
+                a.email = name.into();
+            } else if Self::is_redacted_key_label(label) {
+                a.email = "OpenRouter Key".into();
+                // The CLI consumes this before persistence so that an API
+                // label derived from a credential is never stored or printed.
+                a.extra.insert(
+                    "_limitwatch_openrouter_needs_name".into(),
+                    Value::Bool(true),
+                );
+            } else {
+                a.email = label.into();
+            }
             Ok(a)
         })
     }

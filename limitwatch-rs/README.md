@@ -86,9 +86,15 @@ LIMITWATCH_LOGIN_JSON='{"apiKey":"..."}' limitwatch --login --provider openroute
 * **GitHub Copilot** (`github_copilot`): optional `githubToken`; if omitted,
   the authenticated `gh auth token` is used. The `gh` CLI must then be installed
   and logged in.
-* **OpenAI Codex** (`openai`): `accessToken`, with optional `email`, validated
-  against ChatGPT usage.
-* **OpenRouter** (`openrouter`): `apiKey`, with optional account `name`.
+* **OpenAI Codex** (`openai`): local OpenCode and Codex credentials are
+  discovered first, with stderr feedback for valid/invalid candidates. If none
+  can be used, the CLI reports the transition to OpenAI device authorization
+  before presenting the device flow. Explicit `accessToken` and optional
+  `email` input are also supported and validated against ChatGPT usage.
+* **OpenRouter** (`openrouter`): on a TTY, `--login --provider openrouter`
+  prompts for an API key when JSON input is not supplied, validates it, and
+  offers an optional friendly account name when the returned label is
+  redacted/key-like. Non-interactive use must supply `apiKey` explicitly.
 
 The Rust CLI rejects `google` and `chutes` provider requests. Existing Google
 records remain in `accounts.json` but are ignored by Rust selection, fetching,
@@ -108,10 +114,12 @@ temporary file and atomic replacement. A custom history path may begin with
 
 Existing Google records are preserved on normal saves but ignored by Rust
 selection, fetching, history filters, and completions. `--refresh` requests
-provider/token refresh work where supported, while a fresh quota cache remains
-available as a timeout fallback; `--verbose` diagnostics are
-credential-redacted. JSON/redirected output is ANSI-free and color honors
-`NO_COLOR`.
+network quota fetching for GitHub Copilot and OpenRouter, and OpenAI token
+refresh where available. The overall deadline still retains a fresh cached
+quota result as a timeout fallback. `history --verbose` and `export --verbose`
+write credential-redacted diagnostics to stderr: resolved database path,
+effective filters, and result/record counts. Their normal stdout/export content
+is unchanged. JSON/redirected output is ANSI-free and color honors `NO_COLOR`.
 
 ## Security
 
