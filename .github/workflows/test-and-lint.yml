@@ -12,9 +12,6 @@ permissions:
 jobs:
   lint-and-format:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: limitwatch-rs
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -23,8 +20,6 @@ jobs:
           components: rustfmt, clippy
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: limitwatch-rs
       - name: Check formatting
         run: cargo fmt --check
       - name: Lint
@@ -32,9 +27,6 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: limitwatch-rs
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -45,8 +37,6 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: limitwatch-rs
       - name: Test
         run: cargo test --all-targets --all-features
       - name: Enforce line coverage

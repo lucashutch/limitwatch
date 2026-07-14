@@ -154,8 +154,8 @@ fn github_identity_allows_distinct_accounts() {
 }
 
 #[test]
-fn parity_fixture_documents_google_omission() {
-    let f: Value = serde_json::from_str(include_str!("fixtures/parity/reference.json")).unwrap();
+fn contract_fixture_documents_google_omission() {
+    let f: Value = serde_json::from_str(include_str!("fixtures/contracts/reference.json")).unwrap();
     assert_eq!(f["ignoredProviders"], json!(["google"]));
     assert!(!f["supportedProviders"]
         .as_array()

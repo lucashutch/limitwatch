@@ -193,8 +193,8 @@ fn openai_discovery_and_device_progress_are_safe_and_specific() {
 }
 
 #[test]
-fn python_reference_reset_and_failure_fixture_matches() {
-    let f: Value = serde_json::from_str(include_str!("fixtures/parity/reference.json")).unwrap();
+fn reset_and_failure_contract_fixture_matches() {
+    let f: Value = serde_json::from_str(include_str!("fixtures/contracts/reference.json")).unwrap();
     for c in f["resets"].as_array().unwrap() {
         assert_eq!(normalize_reset(&c["input"]).unwrap(), c["canonical"]);
     }

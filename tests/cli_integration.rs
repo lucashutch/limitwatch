@@ -7,7 +7,7 @@ use std::{
 use tempfile::TempDir;
 
 #[test]
-fn myriota_internal_credits_render_exact_python_text_at_fixed_clock() {
+fn myriota_internal_credits_render_expected_text_at_fixed_clock() {
     use chrono::{TimeZone, Utc};
     use limitwatch::{
         display,
@@ -177,7 +177,7 @@ fn github_validated_identity_metadata_survives_account_storage_reload() {
 }
 
 #[test]
-fn help_exposes_python_compatible_commands() {
+fn help_exposes_primary_commands() {
     let output = bin().arg("--help").output().unwrap();
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(output.status.success());
@@ -301,7 +301,7 @@ fn removed_provider_is_not_loginable_or_completable() {
 #[test]
 fn fixture_completion_provider_candidates_match() {
     let f: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/parity/reference.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/contracts/reference.json")).unwrap();
     let expected: Vec<String> = serde_json::from_value(f["completionProviders"].clone()).unwrap();
     assert_eq!(
         limitwatch::completions::candidates("provider", ""),

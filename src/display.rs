@@ -570,7 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn countdown_uses_python_shapes_without_absolute_time() {
+    fn countdown_uses_compact_units_without_absolute_time() {
         assert_eq!(format_countdown(19 * 60), " (19m)");
         assert_eq!(
             format_countdown(5 * 86_400 + 19 * 3_600 + 43 * 60),
@@ -579,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn normal_bar_fraction_and_standard_row_match_python_spacing() {
+    fn normal_bar_fraction_and_standard_row_have_stable_spacing() {
         assert_eq!(bar(25.5, 30, false), "███████▋                      ");
         let quota = Quota {
             display_name: "Five hour".into(),
@@ -645,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_and_metadata_rows_use_fixed_clock_and_python_labels() {
+    fn compact_and_metadata_rows_use_fixed_clock_and_expected_labels() {
         std::env::set_var("COLUMNS", "80");
         let mut credits = Quota {
             display_name: "Premium".into(),
