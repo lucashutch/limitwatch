@@ -1,51 +1,38 @@
 # Agent Instructions for LimitWatch
 
-This repository contains a CLI tool for monitoring quota usage across multiple providers (Gemini, Antigravity, Chutes.ai, GitHub Copilot, OpenAI).
+This repository's primary implementation is a Rust CLI for monitoring GitHub
+Copilot, OpenAI Codex, and OpenRouter quota usage.
 
-## 🛠 Build, Lint, and Test
-- ALWAYS format code and check linting before commiting
-- ALWAYS check tests pass before commiting
+## Build, lint, and test
 
-The project uses [uv](https://github.com/astral-sh/uv) for dependency management and packaging.
+Run Rust commands from `limitwatch-rs/`:
 
-### Commands
-- **Install Dependencies:** `uv sync`
-- **Run CLI:** `uv run limitwatch`
-- **Testing:** `uv run pytest`
+- Format: `cargo fmt`
+- Format check: `cargo fmt --check`
+- Lint: `cargo clippy --all-targets --all-features -- -D warnings`
+- Test: `cargo test --all-targets --all-features`
+- Run: `cargo run -- --help`
 
-### Project Structure
-- `src/limitwatch/`:
-    - `cli.py`: CLI entry point using `click`. Handles the main loop and interactive login flow.
-    - `quota_client.py`: The **Orchestrator**. It instantiates the correct provider and delegates fetching/filtering/sorting.
-    - `auth.py`: Manages account storage and credential loading. Delegates login to providers.
-    - `providers/`:
-        - `base.py`: Abstract base class `BaseProvider` defining the interface for all providers.
-        - `google.py`: Handles Google OAuth, project discovery, and Gemini/Antigravity quotas.
-        - `chutes.py`: Handles Chutes.ai API key validation, balance, and daily usage quotas.
-    - `display.py`: Pure rendering logic. Agnostic of provider details; uses data provided by the `QuotaClient`.
+Format, lint, and test relevant changes before committing. Use Cargo for Rust
+dependency management; do not manually edit `Cargo.lock`.
 
-## 🛠 Business Logic Details
+## Project structure
 
-### Provider Pattern
-Each provider is responsible for its own:
-- **Auth:** Interactive login and token refresh.
-- **Data:** API calls to its specific endpoints.
-- **Display Metadata:** Defining its primary color, source priority, and sorting/filtering rules.
+- `limitwatch-rs/src/` — primary CLI, configuration, storage, history, export,
+  display, auth, and quota orchestration.
+- `limitwatch-rs/src/providers/` — provider interface and GitHub Copilot,
+  OpenAI, and OpenRouter integrations.
+- `limitwatch-rs/tests/` — integration, contract, compatibility, and rendering
+  tests with sanitized fixtures.
+- `legacy/python/` — archived Python CLI and tests; not part of primary CI or
+  releases.
 
-### Authentication Flow
-- `AuthManager.login(provider_type, **kwargs)` is the entry point.
-- It uses `QuotaClient` to get the appropriate provider instance and calls its `login()` method.
-- **Google:** Uses `InstalledAppFlow` and performs complex project discovery via `loadCodeAssist`, `getManagedProject`, and Cloud Resource Manager.
-- **Chutes:** Validates the API key via `GET /users/me`.
+## Conventions
 
-### Quota Fetching
-- `QuotaClient.fetch_quotas()` triggers the provider's fetching logic.
-- **Google:** Fetches CLI and Antigravity quotas in parallel.
-- **Chutes:** Fetches balance and primary quota usage summaries.
-
-## 🤖 Agent Rules
-- **Modular Extensibility:** When adding a new provider, create a new class in `providers/` and register it in `quota_client.py`.
-- **Provider Isolation:** Do not add provider-specific strings or logic to `display.py` or `cli.py`. Use the `BaseProvider` interface.
-- **Path Construction:** Always use absolute paths for file operations.
-- **Security:** Never log or commit OAuth secrets or API keys.
-- **Python Tooling:** Always use `uv` to run commands and manage the virtual environment. Never use `pip`, `python`, or `venv` directly — use `uv run <cmd>`, `uv add <pkg>`, `uv sync`, etc.
+- Keep provider-specific auth, API, filtering, sorting, and display metadata in
+  provider modules, not generic CLI or display code.
+- Preserve unknown fields when reading and writing shared account/config JSON.
+- The Rust CLI shares `~/.config/limitwatch/` data with the legacy CLI. Never
+  log or commit OAuth secrets, API keys, or account files.
+- Google and Chutes records may be preserved in shared storage but are not
+  supported by the Rust CLI.
