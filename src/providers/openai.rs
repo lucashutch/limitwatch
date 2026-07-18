@@ -654,37 +654,6 @@ impl Provider for OpenAiProvider {
                 .and_then(Value::as_str)
                 .context("OpenAI credentials missing; log in to Codex")?
                 .to_owned();
-            let force_refresh = self
-                .a
-                .extra
-                .get("_limitwatch_force_refresh")
-                .and_then(Value::as_bool)
-                == Some(true);
-            if force_refresh {
-                if let Some(refresh) = self
-                    .a
-                    .extra
-                    .get("refreshToken")
-                    .or_else(|| self.a.extra.get("refresh_token"))
-                    .and_then(Value::as_str)
-                    .or(self.a.refresh_token.as_deref())
-                    .map(str::to_owned)
-                {
-                    let fresh = Self::refresh(c, x, &refresh)?;
-                    token = Self::token(&fresh).context("refresh response omitted access token")?;
-                    self.a
-                        .extra
-                        .insert("accessToken".into(), Value::String(token.clone()));
-                    self.a.refresh_token = Some(Self::refresh_token(&fresh).unwrap_or(refresh));
-                    self.a.extra.remove("refreshToken");
-                    self.a.extra.remove("refresh_token");
-                    self.t.push(Timing {
-                        name: "openai_refresh".into(),
-                        elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
-                        extra: BTreeMap::new(),
-                    });
-                }
-            }
             let mut r = match Self::usage(c, x, &token) {
                 Ok(response) => response,
                 Err(error) => {
@@ -931,15 +900,12 @@ mod tests {
     }
 
     #[test]
-    fn fetch_honors_forced_refresh_before_requesting_usage() {
+    fn fetch_does_not_refresh_a_valid_token_when_forced() {
         let http = Http {
-            responses: Mutex::new(vec![
-                response(200, json!({"access_token": "fresh-access"})),
-                response(
-                    200,
-                    json!({"rate_limit": {"primary_window": {"used_percent": 10}}}),
-                ),
-            ]),
+            responses: Mutex::new(vec![response(
+                200,
+                json!({"rate_limit": {"primary_window": {"used_percent": 10}}}),
+            )]),
             requests: Mutex::new(vec![]),
         };
         let mut account = account("stale-access", Some("saved-refresh"));
@@ -955,10 +921,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(quotas[0].used_pct, Some(10.));
-        assert_eq!(provider.a.extra["accessToken"], "fresh-access");
+        assert_eq!(provider.a.extra["accessToken"], "stale-access");
         assert_eq!(provider.a.refresh_token.as_deref(), Some("saved-refresh"));
-        assert_eq!(provider.timings()[0].name, "openai_refresh");
-        assert_eq!(http.requests.lock().unwrap()[0].method, "POST");
+        assert!(!provider
+            .timings()
+            .iter()
+            .any(|timing| timing.name == "openai_refresh"));
+        let requests = http.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
     }
 
     #[test]
